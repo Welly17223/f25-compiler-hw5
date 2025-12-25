@@ -7,7 +7,7 @@
 #include <cstdlib>
 
 class Constant {
-  public:
+public:
     union ConstantValue {
         int64_t integer;
         double real;
@@ -15,13 +15,13 @@ class Constant {
         bool boolean;
     };
 
-  private:
+private:
     PTypeSharedPtr m_type;
     ConstantValue m_value;
     mutable std::string m_constant_value_string;
     mutable bool m_constant_value_string_is_valid = false;
 
-  public:
+public:
     ~Constant() {
         if (m_type->getPrimitiveType() ==
             PType::PrimitiveTypeEnum::kStringType) {

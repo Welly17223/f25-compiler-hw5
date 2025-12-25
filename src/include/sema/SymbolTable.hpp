@@ -1,12 +1,12 @@
 #ifndef SEMA_SYMBOL_TABLE_H
 #define SEMA_SYMBOL_TABLE_H
 
-#include "AST/constant.hpp"
 #include "AST/PType.hpp"
+#include "AST/constant.hpp"
 #include "AST/function.hpp"
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,7 +15,7 @@
  * Conform to C++ Core Guidelines C.182
  */
 class Attribute {
-  private:
+private:
     enum class Tag { kConstantValue, kParameterDeclNodes };
     Tag m_type;
 
@@ -25,7 +25,7 @@ class Attribute {
         const FunctionNode::DeclNodes *m_parameters_ptr;
     };
 
-  public:
+public:
     ~Attribute() = default;
 
     Attribute(const Constant *p_constant)
@@ -39,7 +39,7 @@ class Attribute {
 };
 
 class SymbolEntry {
-  public:
+public:
     enum class KindEnum : uint8_t {
         kProgramKind,
         kFunctionKind,
@@ -49,14 +49,14 @@ class SymbolEntry {
         kConstantKind
     };
 
-  private:
+private:
     const std::string &m_name;
     KindEnum m_kind;
     size_t m_level;
     const PType *m_p_type;
     Attribute m_attribute;
 
-  public:
+public:
     ~SymbolEntry() = default;
 
     SymbolEntry(const std::string &p_name, const KindEnum p_kind,
@@ -84,10 +84,10 @@ class SymbolEntry {
 };
 
 class SymbolTable {
-  private:
+private:
     std::vector<std::unique_ptr<SymbolEntry>> m_entries;
 
-  public:
+public:
     ~SymbolTable() = default;
     SymbolTable() = default;
 
@@ -95,26 +95,26 @@ class SymbolTable {
     const SymbolEntry *lookup(const std::string &p_name) const;
 
     SymbolEntry *addSymbol(const std::string &p_name,
-                           const SymbolEntry::KindEnum p_kind, const size_t p_level,
-                           const PType *const p_p_type,
+                           const SymbolEntry::KindEnum p_kind,
+                           const size_t p_level, const PType *const p_p_type,
                            const Constant *const p_constant);
     SymbolEntry *addSymbol(const std::string &p_name,
-                           const SymbolEntry::KindEnum p_kind, const size_t p_level,
-                           const PType *const p_p_type,
+                           const SymbolEntry::KindEnum p_kind,
+                           const size_t p_level, const PType *const p_p_type,
                            const FunctionNode::DeclNodes *const p_parameters);
     void dump() const;
 };
 
 class SymbolManager {
-  public:
+public:
     using Table = std::unique_ptr<SymbolTable>;
 
-  private:
+private:
     std::vector<Table> m_tables;
 
     const bool m_opt_dmp;
 
-  public:
+public:
     ~SymbolManager() = default;
     SymbolManager(const bool p_opt_dmp) : m_opt_dmp(p_opt_dmp) {}
 

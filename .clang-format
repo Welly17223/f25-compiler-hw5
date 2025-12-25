@@ -1,0 +1,59 @@
+---
+# 基於 LLVM 風格，因為它最接近此代碼的括號處理與指針位置
+BasedOnStyle: LLVM
+
+# 語言設定
+Language: Cpp
+Standard: c++14
+
+# 縮排設定：4 個空白
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# 行寬限制
+ColumnLimit: 80
+
+# 大括號設定：Attached (左括號在同一行)
+BreakBeforeBraces: Attach
+
+# 指針與參考設定：靠右 (Type *Var)
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# 參數與括號對齊行為
+# 對齊左括號後面的內容
+AlignAfterOpenBracket: Align
+# 允許參數擠在同一行 (除非超出寬度)
+BinPackArguments: true
+BinPackParameters: true
+
+# 如果回傳型別太長或導致函式宣告超出寬度，允許將回傳型別換行
+# 這解釋了為什麼你的代碼中第二個 addSymbol 的 SymbolEntry * 換行了
+AlwaysBreakAfterReturnType: None
+PenaltyReturnTypeOnItsOwnLine: 60
+
+# 成員存取權限標籤 (public/private) 的縮排
+# 通常設為 -4 (靠左) 或 -2
+AccessModifierOffset: -4
+
+# 排序 Include
+SortIncludes: true
+
+# 其他細節
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInContainerLiterals: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# 防止短的函式被強制縮成一行 (保持可讀性)
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+...

@@ -8,11 +8,11 @@
 #include <memory>
 
 class UnaryOperatorNode final : public ExpressionNode {
-  private:
+private:
     Operator m_op;
     std::unique_ptr<ExpressionNode> m_operand;
 
-  public:
+public:
     ~UnaryOperatorNode() = default;
     UnaryOperatorNode(const uint32_t line, const uint32_t col, Operator op,
                       ExpressionNode *p_operand)

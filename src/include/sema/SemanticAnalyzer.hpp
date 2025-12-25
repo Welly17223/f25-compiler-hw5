@@ -13,10 +13,10 @@
 #include <unordered_map>
 
 class SemanticAnalyzer final : public AstNodeVisitor {
-  public:
+public:
     using AstNodeAddr = const AstNode *;
 
-  private:
+private:
     enum class SemanticContext : uint8_t {
         kGlobal,
         kFunction,
@@ -24,12 +24,12 @@ class SemanticAnalyzer final : public AstNodeVisitor {
         kLocal
     };
 
-  private:
+private:
     SymbolManager m_symbol_manager;
-    /// @brief Four kinds of AST nodes opens a scope: program, function, loop, and
-    /// compound statement. The symbol table of the scope they opened is stored
-    /// and mapped back to the AST node. This is for the scope structure to be
-    /// reconstructed while generating code.
+    /// @brief Four kinds of AST nodes opens a scope: program, function, loop,
+    /// and compound statement. The symbol table of the scope they opened is
+    /// stored and mapped back to the AST node. This is for the scope structure
+    /// to be reconstructed while generating code.
     std::unordered_map<AstNodeAddr, SymbolManager::Table>
         m_symbol_table_of_scoping_nodes;
     std::stack<SemanticContext> m_context_stack;
@@ -40,12 +40,12 @@ class SemanticAnalyzer final : public AstNodeVisitor {
     bool m_has_error = false;
     ErrorPrinter m_error_printer;
 
-  public:
+public:
     /// @return The symbol table of the AST nodes that open a scope: program,
     /// function, loop, and compound statement. This is for the scope structure
     /// to be reconstructed while generating code.
-    /// @note This function is called after the semantic analysis is done and can
-    /// only be called once.
+    /// @note This function is called after the semantic analysis is done and
+    /// can only be called once.
     std::unordered_map<AstNodeAddr, SymbolManager::Table> &&
     acquireSymbolTableOfScopingNodes() {
         return std::move(m_symbol_table_of_scoping_nodes);
@@ -75,31 +75,31 @@ class SemanticAnalyzer final : public AstNodeVisitor {
 
     bool hasError() const { return m_has_error; }
 
-  private:
+private:
     /// @brief Prints the error and sets the error flag to `true`.
     /// @note Call this function instead of using the error printer directly.
-    void printError(const Error&);
+    void printError(const Error &);
     /// @brief In addition to printing `printError`, the type of the expression
     /// is set as `kErrorType`.
-    /// @note This is a convenience function to prevent from forgetting to set the
-    /// type on error.
-    void printErrorAndSetType(const Error&, ExpressionNode&);
+    /// @note This is a convenience function to prevent from forgetting to set
+    /// the type on error.
+    void printErrorAndSetType(const Error &, ExpressionNode &);
 
-    SymbolEntry::KindEnum determineVarKind(
-        const VariableNode &p_var_node) const;
+    SymbolEntry::KindEnum
+    determineVarKind(const VariableNode &p_var_node) const;
 
-    bool isShadowingLoopVar(const std::string& p_name) const;
-    bool isRedeclaringSymbol(const std::string& p_name) const;
+    bool isShadowingLoopVar(const std::string &p_name) const;
+    bool isRedeclaringSymbol(const std::string &p_name) const;
 
     /// @note Since reporting errors on arguments requires information specific
     /// to such arguments, we report errors inside this function.
-    bool analyzeArgumentTypes(
-        const FunctionNode::DeclNodes &p_parameters,
-        const FunctionInvocationNode::ExprNodes &p_arguments);
+    bool
+    analyzeArgumentTypes(const FunctionNode::DeclNodes &p_parameters,
+                         const FunctionInvocationNode::ExprNodes &p_arguments);
     /// @note Since there are multiple kinds of errors that can be reported on
     /// the lvalue, we report errors inside this function.
     bool analyzeAssignmentLvalue(const AssignmentNode &p_assignment,
-                                  const SymbolManager &p_symbol_manager);
+                                 const SymbolManager &p_symbol_manager);
     /// @note Since there are multiple kinds of errors that can be reported on
     /// the expression, we report errors inside this function.
     bool analyzeAssignmentExpr(const AssignmentNode &p_assignment);

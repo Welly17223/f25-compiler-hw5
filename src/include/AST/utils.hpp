@@ -11,7 +11,7 @@ struct IdInfo {
     Location location;
     std::string id;
 
-    IdInfo(const uint32_t line, const uint32_t col, const char * const p_id)
+    IdInfo(const uint32_t line, const uint32_t col, const char *const p_id)
         : location(line, col), id(p_id) {}
 };
 

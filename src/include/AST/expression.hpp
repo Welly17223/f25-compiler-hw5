@@ -1,17 +1,17 @@
 #ifndef AST_EXPRESSION_NODE_H
 #define AST_EXPRESSION_NODE_H
 
-#include "AST/ast.hpp"
 #include "AST/PType.hpp"
+#include "AST/ast.hpp"
 
 #include <memory>
 
 class ExpressionNode : public AstNode {
-  protected:
+protected:
     // for carrying type of result of an expression
-      std::unique_ptr<PType> m_type;
+    std::unique_ptr<PType> m_type;
 
-  public:
+public:
     ~ExpressionNode() = default;
     ExpressionNode(const uint32_t line, const uint32_t col)
         : AstNode{line, col} {}

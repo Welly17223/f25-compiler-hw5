@@ -10,10 +10,10 @@
 #include <vector>
 
 class FunctionNode final : public AstNode {
-  public:
+public:
     using DeclNodes = std::vector<std::unique_ptr<DeclNode>>;
 
-  private:
+private:
     std::string m_name;
     DeclNodes m_parameters;
     std::unique_ptr<PType> m_ret_type;
@@ -22,7 +22,7 @@ class FunctionNode final : public AstNode {
     mutable std::string m_prototype_string;
     mutable bool m_prototype_string_is_valid = false;
 
-  public:
+public:
     ~FunctionNode() = default;
     FunctionNode(const uint32_t line, const uint32_t col,
                  const char *const p_name, DeclNodes &p_decl_nodes,

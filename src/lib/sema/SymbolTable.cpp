@@ -41,8 +41,7 @@ SymbolEntry *SymbolTable::addSymbol(const std::string &p_name,
 
 SymbolEntry *
 SymbolTable::addSymbol(const std::string &p_name,
-                       const SymbolEntry::KindEnum p_kind,
-                       const size_t p_level,
+                       const SymbolEntry::KindEnum p_kind, const size_t p_level,
                        const PType *const p_p_type,
                        const FunctionNode::DeclNodes *const p_parameters) {
     m_entries.emplace_back(
@@ -87,8 +86,9 @@ void SymbolTable::dump() const {
     };
 
     auto dump_entry = [&construct_attr_string](const auto &p_entry_ptr) {
-        static const char *kKindStrings[] = {"program",  "function", "parameter",
-                                             "variable", "loop_var", "constant"};
+        static const char *kKindStrings[] = {"program",   "function",
+                                             "parameter", "variable",
+                                             "loop_var",  "constant"};
 
         std::printf("%-33s", p_entry_ptr->getNameCString());
         std::printf("%-11s",
@@ -117,7 +117,8 @@ void SymbolManager::pushScope(SymbolManager::Table p_table) {
 }
 
 SymbolManager::Table SymbolManager::popScope() {
-    assert(getCurrentTable() && "Shouldn't popScope() without pushing any scope");
+    assert(getCurrentTable() &&
+           "Shouldn't popScope() without pushing any scope");
 
     if (m_opt_dmp) {
         getCurrentTable()->dump();
@@ -137,16 +138,17 @@ SymbolEntry *SymbolManager::addSymbol(const std::string &p_name,
         return nullptr;
     }
 
-    auto& current_table = m_tables.back();
-    auto *entry = current_table->addSymbol(
-        p_name, p_kind, getCurrentLevel(), p_p_type, p_attribute);
+    auto &current_table = m_tables.back();
+    auto *entry = current_table->addSymbol(p_name, p_kind, getCurrentLevel(),
+                                           p_p_type, p_attribute);
     return entry;
 }
 
 // explicit instantiation
-template SymbolEntry *SymbolManager::addSymbol<Constant>(
-    const std::string &, const SymbolEntry::KindEnum, const PType *const,
-    const Constant *const);
+template SymbolEntry *
+SymbolManager::addSymbol<Constant>(const std::string &,
+                                   const SymbolEntry::KindEnum,
+                                   const PType *const, const Constant *const);
 template SymbolEntry *SymbolManager::addSymbol<FunctionNode::DeclNodes>(
     const std::string &, const SymbolEntry::KindEnum, const PType *const,
     const FunctionNode::DeclNodes *const);

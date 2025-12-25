@@ -10,18 +10,18 @@
 #include <vector>
 
 class DeclNode final : public AstNode {
-  public:
+public:
     using VarNodes = std::vector<std::unique_ptr<VariableNode>>;
 
-  private:
+private:
     VarNodes m_var_nodes;
 
-  private:
+private:
     void init(const std::vector<IdInfo> *const p_ids,
               const PTypeSharedPtr &p_type,
               ConstantValueNode *const p_constant);
 
-  public:
+public:
     ~DeclNode() = default;
 
     // variable declaration

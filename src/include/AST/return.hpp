@@ -8,14 +8,14 @@
 #include <memory>
 
 class ReturnNode final : public AstNode {
-  private:
+private:
     std::unique_ptr<ExpressionNode> m_ret_val;
 
-  public:
+public:
     ~ReturnNode() = default;
     ReturnNode(const uint32_t line, const uint32_t col,
                ExpressionNode *p_ret_val)
-        : AstNode{line, col}, m_ret_val(p_ret_val){}
+        : AstNode{line, col}, m_ret_val(p_ret_val) {}
 
     const ExpressionNode &getReturnValue() const { return *m_ret_val.get(); }
 

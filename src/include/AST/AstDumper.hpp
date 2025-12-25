@@ -7,10 +7,10 @@
 #include <cstdint>
 
 class AstDumper final : public AstNodeVisitor {
-  private:
+private:
     Indenter m_indenter{' ', 2};
 
-  public:
+public:
     ~AstDumper() = default;
     AstDumper() = default;
 
@@ -32,7 +32,7 @@ class AstDumper final : public AstNodeVisitor {
     void visit(ForNode &p_for) override;
     void visit(ReturnNode &p_return) override;
 
-  private:
+private:
     void printIndent() const;
 };
 

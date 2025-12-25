@@ -14,10 +14,10 @@ struct Location {
 };
 
 class AstNode {
-  protected:
+protected:
     Location location;
 
-  public:
+public:
     virtual ~AstNode() = 0;
     AstNode(const uint32_t line, const uint32_t col);
 

@@ -43,7 +43,8 @@ bool PType::canCoerceTo(const PType *p_type) const {
     if (isScalar() && p_type->isScalar()) {
         return m_type == p_type->m_type || (isInteger() && p_type->isReal());
     }
-    // For arrays, the primitive type must be the same, as well as the dimensions.
+    // For arrays, the primitive type must be the same, as well as the
+    // dimensions.
     if (m_type != p_type->m_type) {
         return false;
     }

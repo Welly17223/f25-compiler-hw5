@@ -9,26 +9,26 @@
 #include <vector>
 
 class VariableReferenceNode final : public ExpressionNode {
-  public:
+public:
     using ExprNodes = std::vector<std::unique_ptr<ExpressionNode>>;
 
-  private:
+private:
     std::string m_name;
     ExprNodes m_indices;
 
-  public:
+public:
     ~VariableReferenceNode() = default;
 
     // normal reference
     VariableReferenceNode(const uint32_t line, const uint32_t col,
                           const char *const p_name)
-        : ExpressionNode{line, col}, m_name(p_name){}
+        : ExpressionNode{line, col}, m_name(p_name) {}
 
     // array reference
     VariableReferenceNode(const uint32_t line, const uint32_t col,
                           const char *const p_name, ExprNodes &p_indices)
         : ExpressionNode{line, col}, m_name(p_name),
-          m_indices(std::move(p_indices)){}
+          m_indices(std::move(p_indices)) {}
 
     const std::string &getName() const { return m_name; }
     const char *getNameCString() const { return m_name.c_str(); }

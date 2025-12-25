@@ -7,26 +7,40 @@
 
 #include <cstdio>
 #include <memory>
+#include <stack>
 #include <string>
 #include <unordered_map>
 
 class CodeGenerator final : public AstNodeVisitor {
-  private:
+private:
+    enum class CodeGenContext : uint8_t {
+        kGlobal,
+        kFunction,
+        kForLoop,
+        kLocal
+    };
+
+private:
     SymbolManager m_symbol_manager;
+    std::stack<CodeGenContext> m_context_stack;
     std::string m_source_file_path;
-    std::unordered_map<SemanticAnalyzer::AstNodeAddr,
-                             SymbolManager::Table>
+    std::unordered_map<SemanticAnalyzer::AstNodeAddr, SymbolManager::Table>
         m_symbol_table_of_scoping_nodes;
-    /// NOTE: `FILE` cannot be simply deleted by `delete`, so we need a custom deleter.
+    /// NOTE: `FILE` cannot be simply deleted by `delete`, so we need a custom
+    /// deleter.
     std::unique_ptr<FILE, decltype(&fclose)> m_output_file{nullptr, &fclose};
 
-  public:
+public:
     ~CodeGenerator() = default;
-    CodeGenerator(const std::string &source_file_name,
-                  const std::string &save_path,
-                  std::unordered_map<SemanticAnalyzer::AstNodeAddr,
-                                           SymbolManager::Table>
-                      &&p_symbol_table_of_scoping_nodes);
+    CodeGenerator(
+        const std::string &source_file_name, const std::string &save_path,
+        std::unordered_map<SemanticAnalyzer::AstNodeAddr, SymbolManager::Table>
+            &&p_symbol_table_of_scoping_nodes);
+
+    SymbolEntry::KindEnum
+    determineVarKind(const VariableNode &p_variable) const;
+    bool isShadowingLoopVar(const std::string &p_name) const;
+    bool isRedeclaringSymbol(const std::string &p_name) const;
 
     void visit(ProgramNode &p_program) override;
     void visit(DeclNode &p_decl) override;

@@ -8,14 +8,13 @@
 #include <memory>
 
 class PrintNode final : public AstNode {
-  private:
+private:
     std::unique_ptr<ExpressionNode> m_target;
 
-  public:
+public:
     ~PrintNode() = default;
-    PrintNode(const uint32_t line, const uint32_t col,
-              ExpressionNode *p_target)
-        : AstNode{line, col}, m_target(p_target){}
+    PrintNode(const uint32_t line, const uint32_t col, ExpressionNode *p_target)
+        : AstNode{line, col}, m_target(p_target) {}
 
     const ExpressionNode &getTarget() const { return *m_target.get(); }
 

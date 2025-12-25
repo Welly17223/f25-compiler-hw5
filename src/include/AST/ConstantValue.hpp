@@ -9,10 +9,10 @@
 #include <memory>
 
 class ConstantValueNode final : public ExpressionNode {
-  private:
+private:
     std::unique_ptr<Constant> m_constant_ptr;
 
-  public:
+public:
     ~ConstantValueNode() = default;
     ConstantValueNode(const uint32_t line, const uint32_t col,
                       Constant *const p_constant)

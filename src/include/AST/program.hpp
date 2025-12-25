@@ -10,18 +10,18 @@
 #include <vector>
 
 class ProgramNode final : public AstNode {
-  public:
+public:
     using DeclNodes = std::vector<std::unique_ptr<DeclNode>>;
     using FuncNodes = std::vector<std::unique_ptr<FunctionNode>>;
 
-  private:
+private:
     std::string m_name;
     std::unique_ptr<PType> m_ret_type;
     DeclNodes m_decl_nodes;
     FuncNodes m_func_nodes;
     std::unique_ptr<CompoundStatementNode> m_body;
 
-  public:
+public:
     ~ProgramNode() = default;
     ProgramNode(const uint32_t line, const uint32_t col,
                 const char *const p_name, PType *const p_ret_type,

@@ -21,7 +21,7 @@ class ForNode;
 class ReturnNode;
 
 class AstNodeVisitor {
-  public:
+public:
     virtual ~AstNodeVisitor() = 0;
 
     virtual void visit(ProgramNode &p_program) {}
