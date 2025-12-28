@@ -159,6 +159,8 @@ CodeGenerator::RiscvRegister CodeGenerator::GetAvailableReg() {
 }
 
 void CodeGenerator::ReturnReg(RiscvRegister reg) {
+    if (reg == RiscvRegisterEnum::zero)
+        return;
     if (reg.saved_callee()) {
         dumpInstructions(m_output_file.get(), riscv_assembly_lw,
                          reg.getNameCString(), 0LU, "sp");
@@ -292,6 +294,19 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         }
 
                         // saved parameters to register
+                        if (parameters.size() >= 8) {
+                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+                                     "\taddi sp, sp, -%lu\t\t\t# increase "
+                                     "parameters stack\n",
+                                     (parameters.size() - 8) << 2);
+                            m_Inst_buff += std::move(inst_buf_c_str);
+                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+                                     "\taddi sp, sp, %lu\t\t\t# decrease "
+                                     "parameters stack\n",
+                                     (parameters.size() - 8) << 2);
+                            func_invocation_inst_buf_post +=
+                                std::move(inst_buf_c_str);
+                        }
                         std::for_each(
                             parameters.begin(), parameters.end(),
                             [&](std::unique_ptr<ExpressionNode> const &arg) {
@@ -324,10 +339,12 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 } else {
                                     snprintf(inst_buf_c_str,
                                              sizeof(inst_buf_c_str) - 1,
-                                             "\tsw %s, -%lu(sp)\t\t\t# save "
+                                             "\tsw %s, %lu(sp)\t\t\t# save "
                                              "%lu parameters\n",
                                              res_arg.getNameCString(),
-                                             arg_index * 4, arg_index);
+                                             (arg_index - 8) * 4, arg_index);
+                                    m_Inst_buff += std::move(inst_buf_c_str);
+                                    inst_buf_c_str[0] = '\0';
                                 }
 
                                 while (!m_Inst_stack.empty()) {
@@ -338,7 +355,9 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
 
                                 for (auto const &i : parameters_expr_res) {
                                     if (i == p_expr_reg ||
-                                        i == ArgumentRegisters[arg_index])
+                                        (arg_index <
+                                             sizeof(ArgumentRegisters) &&
+                                         i == ArgumentRegisters[arg_index]))
                                         continue;
                                     ReturnReg(i);
                                 }
@@ -397,12 +416,29 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         auto &reg_left = local_used_reg[arg.left],
                              &reg_right = local_used_reg[arg.right];
                         reg_left = local_used_reg[ind];
-                        reg_right = GetAvailableReg();
+
+                        if (arg.right != 0)
+                            reg_right = GetAvailableReg();
 
                         fprintf(stderr, "%d Op left: %lu right: %lu reg: %s\n",
                                 ind, arg.left, arg.right,
                                 local_used_reg[ind].getNameCString());
                         switch (arg.op) {
+                        case Operator::kNegOp:
+                            snprintf(inst_buf_c_str, 1023,
+                                     "\tneg %s, %s\t\t\t# neg op\n",
+                                     reg_left.getNameCString(),
+                                     reg_left.getNameCString());
+                            break;
+                        case Operator::kNotOp:
+                            snprintf(inst_buf_c_str, 1023,
+                                     "\txori %s, %s, 1\t\t\t# Not op\n"
+                                     "\taddi %s, %s, 0xff\t\t\t# Not op\n",
+                                     reg_left.getNameCString(),
+                                     reg_left.getNameCString(),
+                                     reg_left.getNameCString(),
+                                     reg_left.getNameCString());
+                            break;
                         case Operator::kLessOp:
                             snprintf(inst_buf_c_str, 1023,
                                      "\tsgt %s, %s, %s\t\t\t# less op\n",
@@ -664,17 +700,16 @@ void CodeGenerator::visit(VariableNode &p_variable) {
                      function_arg_index, current_sp,
                      p_variable.getNameCString());
             m_Inst_stack.emplace(inst_buf);
+            current_sp += stack_depth;
         } else {
+            // ra + function argument
             const_cast<SymbolEntry *>(entry)->setSp(
-                -4 + 4 * (function_arg_index - 8));
+                4 + ((function_arg_index + 1) << 2));
         }
 
         function_arg_index++;
-        current_sp += stack_depth;
         break;
     }
-
-    // p_variable.visitChildNodes(*this);
 }
 
 void CodeGenerator::visit(ConstantValueNode &p_constant_value) {
@@ -859,7 +894,16 @@ void CodeGenerator::visit(BinaryOperatorNode &p_bin_op) {
     three_addr_ind = curr_ind;
 }
 
-void CodeGenerator::visit(UnaryOperatorNode &p_un_op) {}
+void CodeGenerator::visit(UnaryOperatorNode &p_un_op) {
+    size_t curr_ind = ThreeAddressCodeTable.size();
+    ThreeAddressCodeTable.emplace_back((ThreeAddressCodeOp){
+        .op = p_un_op.getOp(), .left = three_addr_ind, .right = 0});
+    const_cast<ExpressionNode &>(p_un_op.getOperand()).accept(*this);
+
+    std::get<ThreeAddressCodeOp>(ThreeAddressCodeTable[curr_ind]).left =
+        three_addr_ind;
+    three_addr_ind = curr_ind;
+}
 
 void CodeGenerator::visit(FunctionInvocationNode &p_func_invocation) {
     three_addr_ind = ThreeAddressCodeTable.size();
