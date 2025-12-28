@@ -1,7 +1,7 @@
 CC = g++
 LEX = flex
 YACC = bison
-CFLAGS = -Wall -std=gnu++14 -g -fsanitize=address -fno-omit-frame-pointer
+CFLAGS = -Wall -std=gnu++17 -g -fsanitize=address -fno-omit-frame-pointer
 INCLUDE = -Iinclude
 ifeq ($(shell uname),Darwin)
 LIBS    = -ll

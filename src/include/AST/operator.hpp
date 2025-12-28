@@ -20,5 +20,6 @@ enum class Operator : uint8_t {
 };
 
 extern const char *kOpString[];
+extern const char *kOpInstr[];
 
 #endif

@@ -55,6 +55,7 @@ private:
     size_t m_level;
     const PType *m_p_type;
     Attribute m_attribute;
+    size_t p_stack_pointer;
 
 public:
     ~SymbolEntry() = default;
@@ -67,9 +68,22 @@ public:
 
     SymbolEntry(const std::string &p_name, const KindEnum p_kind,
                 const size_t p_level, const PType *const p_p_type,
+                const Constant *const p_constant, const size_t stack_place)
+        : m_name(p_name), m_kind(p_kind), m_level(p_level), m_p_type(p_p_type),
+          m_attribute(p_constant), p_stack_pointer(stack_place) {}
+
+    SymbolEntry(const std::string &p_name, const KindEnum p_kind,
+                const size_t p_level, const PType *const p_p_type,
                 const FunctionNode::DeclNodes *const p_parameters)
         : m_name(p_name), m_kind(p_kind), m_level(p_level), m_p_type(p_p_type),
           m_attribute(p_parameters) {}
+
+    SymbolEntry(const std::string &p_name, const KindEnum p_kind,
+                const size_t p_level, const PType *const p_p_type,
+                const FunctionNode::DeclNodes *const p_parameters,
+                const size_t p_stack_place)
+        : m_name(p_name), m_kind(p_kind), m_level(p_level), m_p_type(p_p_type),
+          m_attribute(p_parameters), p_stack_pointer(p_stack_place) {}
 
     const std::string &getName() const { return m_name; }
     const char *getNameCString() const { return m_name.c_str(); }
@@ -81,6 +95,9 @@ public:
     const PType *getTypePtr() const { return m_p_type; }
 
     const Attribute &getAttribute() const { return m_attribute; }
+
+    void setSp(const size_t sp) { p_stack_pointer = sp; }
+    const size_t getSp() const { return p_stack_pointer; }
 };
 
 class SymbolTable {
@@ -101,7 +118,17 @@ public:
     SymbolEntry *addSymbol(const std::string &p_name,
                            const SymbolEntry::KindEnum p_kind,
                            const size_t p_level, const PType *const p_p_type,
+                           const Constant *const p_constant,
+                           const size_t p_curr_sp);
+    SymbolEntry *addSymbol(const std::string &p_name,
+                           const SymbolEntry::KindEnum p_kind,
+                           const size_t p_level, const PType *const p_p_type,
                            const FunctionNode::DeclNodes *const p_parameters);
+    SymbolEntry *addSymbol(const std::string &p_name,
+                           const SymbolEntry::KindEnum p_kind,
+                           const size_t p_level, const PType *const p_p_type,
+                           const FunctionNode::DeclNodes *const p_parameters,
+                           const size_t p_curr_sp);
     void dump() const;
 };
 
@@ -134,6 +161,12 @@ public:
                            const SymbolEntry::KindEnum p_kind,
                            const PType *const p_p_type,
                            const AttributeType *const p_attribute);
+
+    template <typename AttributeType>
+    SymbolEntry *
+    addSymbol(const std::string &p_name, const SymbolEntry::KindEnum p_kind,
+              const PType *const p_p_type,
+              const AttributeType *const p_attribute, const size_t p_curr_sp);
 
     /// @brief Looks up the symbol from the current table to the global table.
     /// @param p_name

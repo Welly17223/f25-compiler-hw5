@@ -41,6 +41,9 @@ public:
     const DeclNodes &getParameters() const { return m_parameters; }
 
     const PType *getTypePtr() const { return m_ret_type.get(); }
+    const std::unique_ptr<CompoundStatementNode> &getBody() const {
+        return m_body;
+    }
 
     void accept(AstNodeVisitor &p_visitor) override { p_visitor.visit(*this); }
     void visitChildNodes(AstNodeVisitor &p_visitor) override;

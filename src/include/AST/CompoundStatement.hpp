@@ -23,6 +23,9 @@ public:
         : AstNode{line, col}, m_decl_nodes(std::move(p_decl_nodes)),
           m_stmt_nodes(std::move(p_stmt_nodes)) {}
 
+    const DeclNodes &getDeclNodes() const { return m_decl_nodes; }
+    const StmtNodes &getStmtNodes() const { return m_stmt_nodes; }
+
     void accept(AstNodeVisitor &p_visitor) override { p_visitor.visit(*this); }
     void visitChildNodes(AstNodeVisitor &p_visitor) override;
 };

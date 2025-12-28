@@ -39,6 +39,17 @@ SymbolEntry *SymbolTable::addSymbol(const std::string &p_name,
     return m_entries.back().get();
 }
 
+SymbolEntry *SymbolTable::addSymbol(const std::string &p_name,
+                                    const SymbolEntry::KindEnum p_kind,
+                                    const size_t p_level,
+                                    const PType *const p_p_type,
+                                    const Constant *const p_constant,
+                                    const size_t p_curr_sp) {
+    m_entries.emplace_back(new SymbolEntry(p_name, p_kind, p_level, p_p_type,
+                                           p_constant, p_curr_sp));
+    return m_entries.back().get();
+}
+
 SymbolEntry *
 SymbolTable::addSymbol(const std::string &p_name,
                        const SymbolEntry::KindEnum p_kind, const size_t p_level,
@@ -46,6 +57,15 @@ SymbolTable::addSymbol(const std::string &p_name,
                        const FunctionNode::DeclNodes *const p_parameters) {
     m_entries.emplace_back(
         new SymbolEntry(p_name, p_kind, p_level, p_p_type, p_parameters));
+    return m_entries.back().get();
+}
+
+SymbolEntry *SymbolTable::addSymbol(
+    const std::string &p_name, const SymbolEntry::KindEnum p_kind,
+    const size_t p_level, const PType *const p_p_type,
+    const FunctionNode::DeclNodes *const p_parameters, const size_t p_curr_sp) {
+    m_entries.emplace_back(new SymbolEntry(p_name, p_kind, p_level, p_p_type,
+                                           p_parameters, p_curr_sp));
     return m_entries.back().get();
 }
 
@@ -144,14 +164,37 @@ SymbolEntry *SymbolManager::addSymbol(const std::string &p_name,
     return entry;
 }
 
+template <typename AttributeType>
+SymbolEntry *SymbolManager::addSymbol(const std::string &p_name,
+                                      const SymbolEntry::KindEnum p_kind,
+                                      const PType *const p_p_type,
+                                      const AttributeType *const p_attribute,
+                                      const size_t p_curr_sp) {
+    if (getCurrentTable()->lookup(p_name)) {
+        return nullptr;
+    }
+
+    auto &current_table = m_tables.back();
+    auto *entry = current_table->addSymbol(p_name, p_kind, getCurrentLevel(),
+                                           p_p_type, p_attribute, p_curr_sp);
+    return entry;
+}
+
 // explicit instantiation
 template SymbolEntry *
 SymbolManager::addSymbol<Constant>(const std::string &,
                                    const SymbolEntry::KindEnum,
                                    const PType *const, const Constant *const);
+template SymbolEntry *
+SymbolManager::addSymbol<Constant>(const std::string &,
+                                   const SymbolEntry::KindEnum,
+                                   const PType *const, const Constant *const, const size_t p_curr_sp);
 template SymbolEntry *SymbolManager::addSymbol<FunctionNode::DeclNodes>(
     const std::string &, const SymbolEntry::KindEnum, const PType *const,
     const FunctionNode::DeclNodes *const);
+template SymbolEntry *SymbolManager::addSymbol<FunctionNode::DeclNodes>(
+    const std::string &, const SymbolEntry::KindEnum, const PType *const,
+    const FunctionNode::DeclNodes *const, const size_t p_curr_sp);
 
 const SymbolEntry *SymbolManager::lookup(const std::string &p_name) const {
     for (auto it = m_tables.rbegin(); it != m_tables.rend(); ++it) {
