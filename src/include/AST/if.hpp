@@ -21,6 +21,8 @@ public:
           m_else_body(p_else_body) {}
 
     const ExpressionNode &getCondition() const { return *m_condition.get(); }
+    const auto &getBody() const { return *m_body.get(); }
+    const auto &getElseBodyPtr() const { return m_else_body; }
 
     void accept(AstNodeVisitor &p_visitor) override { p_visitor.visit(*this); }
     void visitChildNodes(AstNodeVisitor &p_visitor) override;

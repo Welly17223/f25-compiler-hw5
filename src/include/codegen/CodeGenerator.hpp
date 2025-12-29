@@ -112,7 +112,6 @@ public:
 
         bool saved_callee() const {
             switch (reg) {
-            case RiscvRegisterEnum::s0:
             case RiscvRegisterEnum::s1:
             case RiscvRegisterEnum::s2:
             case RiscvRegisterEnum::s3:

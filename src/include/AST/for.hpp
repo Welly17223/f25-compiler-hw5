@@ -27,6 +27,10 @@ public:
     const ConstantValueNode &getUpperBound() const;
 
     void accept(AstNodeVisitor &p_visitor) override { p_visitor.visit(*this); }
+    const auto &getDeclNode() const { return m_loop_var_decl; }
+    const auto &getInit() const { return m_init_stmt; }
+    const auto &getEnd() const { return m_end_condition; }
+    const auto &getBody() const { return m_body; }
     void visitChildNodes(AstNodeVisitor &p_visitor) override;
 };
 

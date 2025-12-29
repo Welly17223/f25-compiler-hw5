@@ -3,6 +3,7 @@
 #include "AST/ConstantValue.hpp"
 #include "AST/FunctionInvocation.hpp"
 #include "AST/VariableReference.hpp"
+#include "AST/decl.hpp"
 #include "AST/for.hpp"
 #include "AST/function.hpp"
 #include "AST/operator.hpp"
@@ -59,9 +60,9 @@ template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 constexpr const char *const riscv_assembly_add_stack_pointer =
-    "\taddi sp, sp, -%lu\n";
+    "\taddi sp, sp, -%ld\n";
 constexpr const char *const riscv_assembly_reset_stack_pointer =
-    "\taddi sp, sp, %lu\n";
+    "\taddi sp, sp, %ld\n";
 constexpr const char *const riscv_assembly_sw = "\taddi sp, sp, -4\n"
                                                 "\tsw %s, %d(%s)\n";
 constexpr const char *const riscv_assembly_lw = "\taddi sp, sp, 4\n"
@@ -72,7 +73,7 @@ constexpr const char *const riscv_assembly_load_global =
     "\tla %s, %s\t\t\t\t# load global variable address %s\n"
     "\tlw %s, %d(%s)\n";
 constexpr const char *const riscv_assembly_load_local =
-    "\tlw %s, %ld(sp)\t\t\t# load local variable %s\n";
+    "\tlw %s, %ld(s0)\t\t\t# load local variable %s\n";
 constexpr const char *const riscv_assembly_op =
     "\t%s %s, %s, %s\t\t\t# op reg1, reg1, reg2\n";
 
@@ -255,7 +256,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 reuse_argument_reg = true;
                                 snprintf(
                                     inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tsw %s, %lu(sp)\t\t\t# save caller "
+                                    "\tsw %s, %ld(sp)\t\t\t# save caller "
                                     "preserved "
                                     "register %s\t\t\t\n",
                                     argu_reg.getNameCString(), 4 * reused_count,
@@ -265,7 +266,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
 
                                 snprintf(
                                     inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tlw %s, %lu(sp)\t\t\t# load caller "
+                                    "\tlw %s, %ld(sp)\t\t\t# load caller "
                                     "preserved "
                                     "argument register %s\t\t\t\n",
                                     argu_reg.getNameCString(), 4 * reused_count,
@@ -279,7 +280,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         if (reuse_argument_reg) {
                             current_sp += reused_count * 4;
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, -%lu\n", reused_count * 4);
+                                     "\taddi sp, sp, -%ld\n", reused_count * 4);
                             func_invocation_inst_buf_pre =
                                 std::move(inst_buf_c_str) +
                                 std::move(func_invocation_inst_buf_pre);
@@ -288,7 +289,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 std::move(func_invocation_inst_buf_pre);
 
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, %lu\n", reused_count * 4);
+                                     "\taddi sp, sp, %ld\n", reused_count * 4);
                             func_invocation_inst_buf_post +=
                                 std::move(inst_buf_c_str);
                         }
@@ -296,12 +297,12 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         // saved parameters to register
                         if (parameters.size() >= 8) {
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, -%lu\t\t\t# increase "
+                                     "\taddi sp, sp, -%ld\t\t\t# increase "
                                      "parameters stack\n",
                                      (parameters.size() - 8) << 2);
                             m_Inst_buff += std::move(inst_buf_c_str);
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, %lu\t\t\t# decrease "
+                                     "\taddi sp, sp, %ld\t\t\t# decrease "
                                      "parameters stack\n",
                                      (parameters.size() - 8) << 2);
                             func_invocation_inst_buf_post +=
@@ -310,7 +311,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         std::for_each(
                             parameters.begin(), parameters.end(),
                             [&](std::unique_ptr<ExpressionNode> const &arg) {
-                                fprintf(stderr, "handle %lu argument\n",
+                                fprintf(stderr, "handle %ld argument\n",
                                         arg_index);
                                 ThreeAddressCodeTable.clear();
 
@@ -327,7 +328,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                         temp = expr_handler(
                                             0, RiscvRegisterEnum::zero);
                                     }
-                                    temp;
+                                    std::move(temp);
                                 });
 
                                 RiscvRegister res_arg = parameters_expr_res[0];
@@ -339,8 +340,8 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 } else {
                                     snprintf(inst_buf_c_str,
                                              sizeof(inst_buf_c_str) - 1,
-                                             "\tsw %s, %lu(sp)\t\t\t# save "
-                                             "%lu parameters\n",
+                                             "\tsw %s, %ld(sp)\t\t\t# save "
+                                             "%ld parameters\n",
                                              res_arg.getNameCString(),
                                              (arg_index - 8) * 4, arg_index);
                                     m_Inst_buff += std::move(inst_buf_c_str);
@@ -420,7 +421,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         if (arg.right != 0)
                             reg_right = GetAvailableReg();
 
-                        fprintf(stderr, "%d Op left: %lu right: %lu reg: %s\n",
+                        fprintf(stderr, "%d Op left: %ld right: %ld reg: %s\n",
                                 ind, arg.left, arg.right,
                                 local_used_reg[ind].getNameCString());
                         switch (arg.op) {
@@ -441,7 +442,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                             break;
                         case Operator::kLessOp:
                             snprintf(inst_buf_c_str, 1023,
-                                     "\tsgt %s, %s, %s\t\t\t# less op\n",
+                                     "\tslt %s, %s, %s\t\t\t# less op\n",
                                      reg_left.getNameCString(),
                                      reg_left.getNameCString(),
                                      reg_right.getNameCString());
@@ -450,10 +451,11 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                             snprintf(
                                 inst_buf_c_str, 1023,
                                 "\tsgt %s, %s, %s\t\t\t# less or equal op\n"
-                                "\txori %s, 1",
+                                "\txori %s, %s, 1\n",
                                 reg_left.getNameCString(),
                                 reg_left.getNameCString(),
                                 reg_right.getNameCString(),
+                                reg_left.getNameCString(),
                                 reg_left.getNameCString());
                             break;
                         case Operator::kGreaterOp:
@@ -467,10 +469,11 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                             snprintf(
                                 inst_buf_c_str, 1023,
                                 "\tslt %s, %s, %s\t\t\t# greater or equal op\n"
-                                "\txori %s, 1",
+                                "\txori %s, %s, 1\n",
                                 reg_left.getNameCString(),
                                 reg_left.getNameCString(),
                                 reg_right.getNameCString(),
+                                reg_left.getNameCString(),
                                 reg_left.getNameCString());
                             break;
                         case Operator::kEqualOp:
@@ -563,7 +566,7 @@ void CodeGenerator::visit(ProgramNode &p_program) {
         "\taddi sp, sp, -8\n"
         "\tsw ra, 4(sp)\n"
         "\tsw s0, 0(sp)\n"
-        "\taddi s0, sp, 8\n"
+        "\tmv s0, sp\n"
         "\t# main start\n";
 
     dumpInstructions(m_output_file.get(), riscv_assembly_main_func_begin);
@@ -611,13 +614,13 @@ void CodeGenerator::visit(VariableNode &p_variable) {
 
     constexpr const char *const riscv_assembly_local_integer_constant =
         "\tli %s, %s\n"
-        "\tsw %s, %ld(sp)\n";
+        "\tsw %s, %ld(s0)\n";
     constexpr const char *const riscv_assembly_local_float_constant =
-        "\tla t0, .LC%lu\n"
+        "\tla t0, .LC%ld\n"
         "\tflw ft1, %ld(t0)\n"
-        "\tfsw ft1, %ld(sp)\n";
+        "\tfsw ft1, %ld(s0)\n";
     constexpr const char *const riscv_assembly_local_float_constant_declare =
-        ".LC%lu:\n"
+        ".LC%ld:\n"
         "\t.float %s\n";
 
     uint64_t dim = std::reduce(
@@ -647,7 +650,7 @@ void CodeGenerator::visit(VariableNode &p_variable) {
             stack_depth = INT_SIZE * dim;
             const_cast<SymbolEntry *>(entry)->setSp(current_sp);
             if (entry)
-                fprintf(stderr, "var %s at %lu\n", p_name, entry->getSp());
+                fprintf(stderr, "var %s at %ld\n", p_name, entry->getSp());
         } break;
         case PType::PrimitiveTypeEnum::kRealType:
             stack_depth = FLOAT_SIZE * dim;
@@ -666,14 +669,14 @@ void CodeGenerator::visit(VariableNode &p_variable) {
                          riscv_assembly_local_integer_constant,
                          reg.getNameCString(),
                          p_constant->getConstantValueCString(),
-                         reg.getNameCString(), current_sp);
+                         reg.getNameCString(), -current_sp - 4);
                 m_Inst_stack.emplace(inst_buf);
                 break;
 
             case PType::PrimitiveTypeEnum::kRealType:
                 snprintf(inst_buf, sizeof(inst_buf) - 1,
                          riscv_assembly_local_float_constant,
-                         LocalConstantLabel, 0LU, current_sp);
+                         LocalConstantLabel, 0LU, -current_sp - 4);
                 m_Inst_stack.emplace(inst_buf);
                 snprintf(inst_buf, sizeof(inst_buf) - 1,
                          riscv_assembly_local_float_constant_declare,
@@ -696,15 +699,15 @@ void CodeGenerator::visit(VariableNode &p_variable) {
         // for a0 ~ a7
         if (function_arg_index <= 7) {
             snprintf(inst_buf, sizeof(inst_buf) - 1,
-                     "\tsw a%lu, %lu(sp)\t\t\t# save %s argument to memory\n",
-                     function_arg_index, current_sp,
+                     "\tsw a%ld, %ld(s0)\t\t\t# save %s argument to memory\n",
+                     function_arg_index, -current_sp - 4,
                      p_variable.getNameCString());
             m_Inst_stack.emplace(inst_buf);
             current_sp += stack_depth;
         } else {
             // ra + function argument
             const_cast<SymbolEntry *>(entry)->setSp(
-                4 + ((function_arg_index + 1) << 2));
+                -((function_arg_index - 8) << 2) - 12);
         }
 
         function_arg_index++;
@@ -725,11 +728,14 @@ void CodeGenerator::visit(FunctionNode &p_function) {
         "\t.globl %s\n"
         "\t.type %s, @function\n"
         "%s:\n"
-        "\taddi sp, sp, -4\n"
-        "\tsw ra, 0(sp)\n";
+        "\taddi sp, sp, -8\n"
+        "\tsw s0, 4(sp)\n"
+        "\tsw ra, 0(sp)\n"
+        "\tmv s0, sp\n";
     constexpr const char *const riscv_assembly_function_end =
         "\tlw ra, 0(sp)\n"
-        "\taddi sp, sp, 4\n"
+        "\tlw s0, 4(sp)\n"
+        "\taddi sp, sp, 8\n"
         "\tjr ra\n"
         "\t.size %s, .-%s\n";
 
@@ -757,7 +763,6 @@ void CodeGenerator::visit(FunctionNode &p_function) {
         m_Inst_stack.pop();
     }
 
-    // FIX: I can't see local variable and increase the stack pointer!
     m_context_stack.emplace(CodeGenContext::kLocal);
     p_function.visitBodyChildNodes(*this);
     m_context_stack.pop();
@@ -783,9 +788,9 @@ void CodeGenerator::visit(CompoundStatementNode &p_compound_statement) {
     // Reconstruct the scope for looking up the symbol entry.
     auto visit_ast_node = [&](auto &ast_node) { ast_node->accept(*this); };
     auto prev_sp = current_sp;
-    if (m_context_stack.top() != CodeGenContext::kFunction) {
-        current_sp = 0;
-    }
+    bool is_for_loop = m_context_stack.top() == CodeGenContext::kForLoop;
+    char inst_buf[1024];
+    std::string local_inst_buf;
 
     m_context_stack.emplace(CodeGenContext::kLocal);
     m_symbol_manager.pushScope(
@@ -794,27 +799,47 @@ void CodeGenerator::visit(CompoundStatementNode &p_compound_statement) {
     std::for_each(p_compound_statement.getDeclNodes().begin(),
                   p_compound_statement.getDeclNodes().end(), visit_ast_node);
 
-    dumpInstructions(m_output_file.get(), riscv_assembly_add_stack_pointer,
-                     (const size_t)current_sp);
+    if (prev_sp != current_sp && !is_for_loop)
+        dumpInstructions(m_output_file.get(), riscv_assembly_add_stack_pointer,
+                         (const size_t)current_sp - prev_sp);
+    else if (prev_sp != current_sp && is_for_loop) {
+        snprintf(inst_buf, sizeof(inst_buf) - 1,
+                 riscv_assembly_add_stack_pointer,
+                 (const size_t)current_sp - prev_sp);
+        local_inst_buf += std::move(inst_buf);
+    }
+
     while (!m_Inst_stack.empty()) {
-        dumpInstructions(m_output_file.get(), m_Inst_stack.top().c_str());
+        if (!is_for_loop)
+            dumpInstructions(m_output_file.get(), m_Inst_stack.top().c_str());
+        else {
+            local_inst_buf += m_Inst_stack.top();
+        }
         m_Inst_stack.pop();
     }
 
     std::for_each(p_compound_statement.getStmtNodes().begin(),
                   p_compound_statement.getStmtNodes().end(), visit_ast_node);
 
-    dumpInstructions(m_output_file.get(), m_Inst_buff.c_str());
-    m_Inst_buff.clear();
+    if (!is_for_loop) {
+        dumpInstructions(m_output_file.get(), m_Inst_buff.c_str());
+        m_Inst_buff.clear();
+    } else {
+        m_Inst_buff = std::move(local_inst_buf) + std::move(m_Inst_buff);
+    }
 
     m_context_stack.pop();
     m_symbol_manager.popScope();
-    dumpInstructions(m_output_file.get(), riscv_assembly_reset_stack_pointer,
-                     current_sp);
 
-    if (m_context_stack.top() != CodeGenContext::kFunction) {
-        current_sp = prev_sp;
+    if (prev_sp != current_sp && !is_for_loop) {
+        dumpInstructions(m_output_file.get(),
+                         riscv_assembly_reset_stack_pointer, current_sp);
+    } else if (prev_sp != current_sp) {
+        snprintf(inst_buf, sizeof(inst_buf) - 1,
+                 riscv_assembly_reset_stack_pointer, current_sp);
+        m_Inst_buff += std::move(inst_buf);
     }
+    current_sp = prev_sp;
 }
 
 void CodeGenerator::visit(PrintNode &p_print) {
@@ -829,7 +854,7 @@ void CodeGenerator::visit(PrintNode &p_print) {
     ThreeAddressCodeTable.clear();
 
     p_print.visitChildNodes(*this);
-    fprintf(stderr, "ThreeAddressCodeTable size: %lu\n",
+    fprintf(stderr, "ThreeAddressCodeTable size: %ld\n",
             ThreeAddressCodeTable.size());
 
     auto local_used_reg = expr_handler(0, RiscvRegisterEnum::zero);
@@ -867,7 +892,7 @@ void CodeGenerator::visit(PrintNode &p_print) {
     std::for_each(local_used_reg.begin(), local_used_reg.end(),
                   [&](auto &used_reg) { ReturnReg(used_reg); });
 
-    fprintf(stderr, "avaliable reg: %lu\nUsed: ", avaliable_reg.size());
+    fprintf(stderr, "avaliable reg: %ld\nUsed: ", avaliable_reg.size());
 
     std::for_each(used_reg.begin(), used_reg.end(), [&](auto &reg) {
         fprintf(stderr, "%s ", reg.getNameCString());
@@ -917,7 +942,7 @@ void CodeGenerator::visit(VariableReferenceNode &p_variable_ref) {
 
 void CodeGenerator::visit(AssignmentNode &p_assignment) {
     constexpr const char *const riscv_assembly_assign_local =
-        "\tsw %s, %d(sp)\t\t\t# assign local variable %s\n";
+        "\tsw %s, %d(s0)\t\t\t# assign local variable %s\n";
     constexpr const char *const riscv_assembly_assign_glob =
         "\tla %s, %s\t\t\t\t# load glob var from addr\n"
         "\tsw %s, %d(%s)\t\t\t# save value to glob\n";
@@ -982,7 +1007,7 @@ void CodeGenerator::visit(ReadNode &p_read) {
                  entry->getNameCString(), entry->getNameCString());
     } else {
         snprintf(inst_buf, sizeof(inst_buf) - 1,
-                 "\taddi a1, sp, %lu\t\t\t# load address of variable %s\n",
+                 "\taddi a1, sp, %ld\t\t\t# load address of variable %s\n",
                  entry->getSp(), entry->getNameCString());
     }
     m_Inst_buff += inst_buf;
@@ -1002,7 +1027,7 @@ void CodeGenerator::visit(ReadNode &p_read) {
         m_Inst_buff += inst_buf;
     }
 
-    fprintf(stderr, "avaliable reg: %lu\nUsed: ", avaliable_reg.size());
+    fprintf(stderr, "avaliable reg: %ld\nUsed: ", avaliable_reg.size());
 
     std::for_each(used_reg.begin(), used_reg.end(), [&](auto &reg) {
         fprintf(stderr, "%s ", reg.getNameCString());
@@ -1010,19 +1035,157 @@ void CodeGenerator::visit(ReadNode &p_read) {
     puts("\n");
 }
 
-void CodeGenerator::visit(IfNode &p_if) {}
+void CodeGenerator::visit(IfNode &p_if) {
+    char inst_buf_c_str[1024];
+    const auto &m_body = p_if.getBody();
+    const auto &m_else_ptr = p_if.getElseBodyPtr();
+    long if_body_label = BranchLabel, else_label, end_label = BranchLabel + 1;
+    BranchLabel += 2;
+    if (m_else_ptr) {
+        else_label = BranchLabel;
+        BranchLabel += 1;
+    }
 
-void CodeGenerator::visit(WhileNode &p_while) {}
+    const_cast<ExpressionNode &>(p_if.getCondition()).accept(*this);
+
+    auto local_used_reg = expr_handler(0, RiscvRegisterEnum::zero);
+    auto &result_reg = local_used_reg[0];
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "\tbeq %s, zero, L%ld\t\t# if start\n"
+             "L%ld:\n",
+             result_reg.getNameCString(), m_else_ptr ? else_label : end_label,
+             if_body_label);
+    m_Inst_buff += inst_buf_c_str;
+
+    std::for_each(local_used_reg.begin(), local_used_reg.end(),
+                  [&](auto &reg) { ReturnReg(reg); });
+
+    const_cast<CompoundStatementNode &>(m_body).accept(*this);
+    if (m_else_ptr) {
+        snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+                 "\tj L%ld\n"
+                 "L%ld:\t\t\t\t# else begin\n",
+                 end_label, else_label);
+        m_Inst_buff += inst_buf_c_str;
+        const_cast<std::unique_ptr<CompoundStatementNode> &>(m_else_ptr)
+            ->accept(*this);
+    }
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "L%ld:\t\t\t\t# if end\n", end_label);
+    m_Inst_buff += inst_buf_c_str;
+}
+
+void CodeGenerator::visit(WhileNode &p_while) {
+    long l1 = BranchLabel, l2 = BranchLabel + 1, l3 = BranchLabel + 2;
+    BranchLabel += 3;
+    char inst_buf_c_str[1024];
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "L%lu:\t\t\t\t# while loop start\n", l1);
+    m_Inst_buff += inst_buf_c_str;
+
+    const_cast<ExpressionNode &>(p_while.getCondition()).accept(*this);
+    auto local_used_reg = expr_handler(0, RiscvRegisterEnum::zero);
+    auto &result_reg = local_used_reg[0];
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "\tbeq %s, zero, L%lu\n"
+             "L%lu:\t\t\t\t# while loop body\n",
+             result_reg.getNameCString(), l3, l2);
+    m_Inst_buff += inst_buf_c_str;
+    std::for_each(local_used_reg.begin(), local_used_reg.end(),
+                  [&](auto &reg) { ReturnReg(reg); });
+
+    const_cast<CompoundStatementNode &>(p_while.getBody()).accept(*this);
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "\tj L%ld\n"
+             "L%ld:\t\t\t\t# while loop end\n",
+             l1, l3);
+    m_Inst_buff += inst_buf_c_str;
+}
 
 void CodeGenerator::visit(ForNode &p_for) {
     // Reconstruct the scope for looking up the symbol entry.
     m_symbol_manager.pushScope(
         std::move(m_symbol_table_of_scoping_nodes.at(&p_for)));
+    long l1 = BranchLabel, l2 = BranchLabel + 1, l3 = BranchLabel + 2;
 
-    p_for.visitChildNodes(*this);
+    BranchLabel += 3;
+    size_t prev_sp = current_sp;
+    char inst_buf_c_str[2048];
+    std::string inst_buf, prev_inst_buf = std::move(m_Inst_buff);
+
+    auto const &lower = p_for.getLowerBound();
+    auto const &upper = p_for.getUpperBound();
+
+    m_context_stack.emplace(CodeGenContext::kForLoop);
+    const_cast<std::unique_ptr<DeclNode> &>(p_for.getDeclNode())->accept(*this);
+    const_cast<std::unique_ptr<AssignmentNode> &>(p_for.getInit())
+        ->accept(*this);
+    const_cast<std::unique_ptr<ExpressionNode> &>(p_for.getEnd())
+        ->accept(*this);
+
+    // handle i init value
+    auto reg_loop_var = GetAvailableReg();
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "\taddi sp, sp, -%ld\t\t\t# for loop var\n", current_sp - prev_sp);
+    inst_buf += std::move(inst_buf_c_str);
+    inst_buf += std::move(m_Inst_buff);
+    m_Inst_buff.clear();
+
+    auto const &loop_var_name =
+        p_for.getDeclNode()->getVariables()[0]->getNameCString();
+    auto const &loop_var_entry = m_symbol_manager.lookup(loop_var_name);
+
+    // handle end condition for loop
+    auto reg_upper_bound = GetAvailableReg();
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "L%ld:\n"
+             "\tlw %s, %ld(s0)\t\t\t# load loop var\n"
+             "\tli %s, %s\t\t\t# load upper bound\n"
+             "\tbge %s, %s, L%ld\n",
+             l1, reg_loop_var.getNameCString(), loop_var_entry->getSp(),
+             reg_upper_bound.getNameCString(), upper.getConstantValueCString(),
+             reg_loop_var.getNameCString(), reg_upper_bound.getNameCString(),
+             l3);
+    inst_buf += std::move(inst_buf_c_str);
+    ReturnReg(reg_upper_bound);
+    ReturnReg(reg_loop_var);
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1, "L%ld:\n", l2);
+    inst_buf += std::move(inst_buf_c_str);
+
+    // loop body
+    const_cast<std::unique_ptr<CompoundStatementNode> &>(p_for.getBody())
+        ->accept(*this);
+    inst_buf += m_Inst_buff;
+
+    // i+= 1
+    reg_loop_var = GetAvailableReg();
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "\tlw %s, %ld(s0)\t\t\t# load loop var\n"
+             "\taddi %s, %s, 1\t\t\t# loop var += 1\n"
+             "\tsw %s, %ld(s0)\t\t\t# save loop var\n"
+             "\tj L%ld\n",
+             reg_loop_var.getNameCString(), loop_var_entry->getSp(),
+             reg_loop_var.getNameCString(), reg_loop_var.getNameCString(),
+             reg_loop_var.getNameCString(), loop_var_entry->getSp(), l1);
+    inst_buf += std::move(inst_buf_c_str);
+    ReturnReg(reg_loop_var);
+
+    snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+             "L%ld:\n"
+             "\taddi sp, sp, %ld\t\t\t# end for loop\n",
+             l3, current_sp - prev_sp);
+    inst_buf += std::move(inst_buf_c_str);
 
     // Remove the entries in the hash table
+    m_context_stack.pop();
     m_symbol_manager.popScope();
+    current_sp = prev_sp;
+    m_Inst_buff = std::move(prev_inst_buf) + inst_buf;
 }
 
 void CodeGenerator::visit(ReturnNode &p_return) {
@@ -1030,8 +1193,13 @@ void CodeGenerator::visit(ReturnNode &p_return) {
 
     // return value
     auto local_used_reg = expr_handler(0, RiscvRegisterEnum::a0);
-    if (local_used_reg.size() == 0)
-        return;
+    char buf[1024];
+    snprintf(buf, sizeof(buf) - 1,
+             "\tlw ra, 0(s0)\n"
+             "\taddi sp, s0, 8\n"
+             "\tlw s0, 4(s0)\n"
+             "\tjr ra\t\t\t\t# return\n");
+    m_Inst_buff += std::move(buf);
 
     std::for_each(local_used_reg.begin(), local_used_reg.end(),
                   [&](auto &reg) { ReturnReg(reg); });
