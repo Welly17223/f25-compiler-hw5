@@ -39,12 +39,19 @@ private:
     enum class CodeGenContext : uint8_t {
         kGlobal,
         kFunction,
-        kForLoop,
+        kForLoopIfWhile,
         kLocal
     };
 
 public:
-    enum class RiscvRegisterEnum : uint8_t {
+    struct Inst_virt_reg {
+        bool true_inst;
+        size_t write_reg;
+        std::unique_ptr<std::vector<size_t>> read_regs;
+        std::string inst;
+    };
+    enum class RiscvRegisterEnum : int8_t {
+        NO_REG = -1,
         zero,
         ra,
         sp,
@@ -214,7 +221,11 @@ public:
     bool isShadowingLoopVar(const std::string &p_name) const;
     bool isRedeclaringSymbol(const std::string &p_name) const;
 
-    std::vector<CodeGenerator::RiscvRegister> expr_handler(size_t start_ind, RiscvRegister ret_reg);
+    std::vector<CodeGenerator::RiscvRegister>
+    expr_handler(size_t start_ind, RiscvRegister ret_reg);
+    std::vector<CodeGenerator::RiscvRegister>
+    expr_handler(size_t start_ind, RiscvRegister ret_reg,
+                 std::string &inst_buf);
 
     void visit(ProgramNode &p_program) override;
     void visit(DeclNode &p_decl) override;

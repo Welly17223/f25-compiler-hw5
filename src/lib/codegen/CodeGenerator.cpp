@@ -114,7 +114,7 @@ static void dumpInstructions(FILE *p_out_file, const char *format, ...) {
 
 SymbolEntry::KindEnum
 CodeGenerator::determineVarKind(const VariableNode &p_variable) const {
-    if (m_context_stack.top() == CodeGenContext::kForLoop) {
+    if (m_context_stack.top() == CodeGenContext::kForLoopIfWhile) {
         return SymbolEntry::KindEnum::kLoopVarKind;
     }
 
@@ -172,8 +172,20 @@ void CodeGenerator::ReturnReg(RiscvRegister reg) {
 }
 
 std::vector<CodeGenerator::RiscvRegister>
+CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg,
+                            std::string &inst_buf) {
+    std::string temp = std::move(m_Inst_buff);
+    m_Inst_buff.clear();
+    auto ret_val = expr_handler(start_ind, ret_reg);
+    inst_buf += std::move(m_Inst_buff);
+    m_Inst_buff = std::move(temp);
+    return ret_val;
+}
+
+std::vector<CodeGenerator::RiscvRegister>
 CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
     std::vector<RiscvRegister> local_used_reg(ThreeAddressCodeTable.size());
+    std::vector<size_t> local_used_virtual_reg(ThreeAddressCodeTable.size());
     auto localThreeAddressCodeTable = std::move(ThreeAddressCodeTable);
 
     if (ret_reg != RiscvRegisterEnum::zero) {
@@ -183,6 +195,9 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
     }
 
     std::unordered_map<std::string, RiscvRegister> var_ref_regs;
+    std::unordered_map<std::string, size_t> var_ref_virtual_regs;
+    size_t virtual_mem_counter = 1;
+    std::vector<Inst_virt_reg> virt_reg_inst_stack;
     std::stack<std::string> inst_stack;
 
     fprintf(stderr, "start expr_handler: \n");
@@ -244,11 +259,6 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                         std::set<RiscvRegister> saved_reg;
 
                         for (auto const &argu_reg : used_reg) {
-                            char temp[1024];
-                            snprintf(temp, 1023, "\t# used reg: %s\n",
-                                     argu_reg.getNameCString());
-                            func_invocation_inst_buf_pre += std::move(temp);
-
                             if (argu_reg.saved_caller() &&
                                 argu_reg != p_expr_reg &&
                                 (!saved_reg.count(argu_reg))) {
@@ -277,6 +287,35 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                             }
                         }
 
+                        for (auto const &argu_reg : local_used_reg) {
+                            if (argu_reg.saved_caller() &&
+                                argu_reg != p_expr_reg &&
+                                (!saved_reg.count(argu_reg))) {
+                                saved_reg.emplace(argu_reg);
+                                reuse_argument_reg = true;
+                                snprintf(
+                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+                                    "\tsw %s, %ld(sp)\t\t\t# save caller "
+                                    "preserved "
+                                    "register %s\n",
+                                    argu_reg.getNameCString(), 4 * reused_count,
+                                    argu_reg.getNameCString());
+                                func_invocation_inst_buf_pre +=
+                                    std::move(inst_buf_c_str);
+
+                                snprintf(
+                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
+                                    "\tlw %s, %ld(sp)\t\t\t# load caller "
+                                    "preserved "
+                                    "argument register %s\t\t\t\n",
+                                    argu_reg.getNameCString(), 4 * reused_count,
+                                    argu_reg.getNameCString());
+                                func_invocation_inst_buf_post +=
+                                    std::move(inst_buf_c_str);
+                                reused_count++;
+                            }
+                        }
+
                         if (reuse_argument_reg) {
                             current_sp += reused_count * 4;
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
@@ -285,8 +324,8 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 std::move(inst_buf_c_str) +
                                 std::move(func_invocation_inst_buf_pre);
 
-                            m_Inst_buff +=
-                                std::move(func_invocation_inst_buf_pre);
+                            /* m_Inst_buff +=
+                                std::move(func_invocation_inst_buf_pre); */
 
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
                                      "\taddi sp, sp, %ld\n", reused_count * 4);
@@ -300,7 +339,8 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                      "\taddi sp, sp, -%ld\t\t\t# increase "
                                      "parameters stack\n",
                                      (parameters.size() - 8) << 2);
-                            m_Inst_buff += std::move(inst_buf_c_str);
+                            func_invocation_inst_buf_pre += inst_buf_c_str;
+                            // m_Inst_buff += std::move(inst_buf_c_str);
                             snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
                                      "\taddi sp, sp, %ld\t\t\t# decrease "
                                      "parameters stack\n",
@@ -323,10 +363,12 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                     std::vector<RiscvRegister> temp;
                                     if (arg_index < 8) {
                                         temp = expr_handler(
-                                            0, ArgumentRegisters[arg_index]);
+                                            0, ArgumentRegisters[arg_index],
+                                            func_invocation_inst_buf_pre);
                                     } else {
                                         temp = expr_handler(
-                                            0, RiscvRegisterEnum::zero);
+                                            0, RiscvRegisterEnum::zero,
+                                            func_invocation_inst_buf_pre);
                                     }
                                     std::move(temp);
                                 });
@@ -344,7 +386,9 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                              "%ld parameters\n",
                                              res_arg.getNameCString(),
                                              (arg_index - 8) * 4, arg_index);
-                                    m_Inst_buff += std::move(inst_buf_c_str);
+                                    func_invocation_inst_buf_pre +=
+                                        inst_buf_c_str;
+                                    // m_Inst_buff += std::move(inst_buf_c_str);
                                     inst_buf_c_str[0] = '\0';
                                 }
 
@@ -376,7 +420,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                                 p_expr_reg.getNameCString());
 
                         pre_inst_buf +=
-                            // std::move(func_invocation_inst_buf_pre) +
+                            std::move(func_invocation_inst_buf_pre) +
                             std::move(func_invocation_inst_buf);
                         post_inst_buf +=
                             std::move(func_invocation_inst_buf_post);
@@ -758,12 +802,11 @@ void CodeGenerator::visit(FunctionNode &p_function) {
     };
 
     while (!m_Inst_stack.empty()) {
-        // snprintf(temp_buf, sizeof(temp_buf) - 1, m_Inst_stack.top().c_str());
         argument_inst_buf += m_Inst_stack.top();
         m_Inst_stack.pop();
     }
 
-    m_context_stack.emplace(CodeGenContext::kLocal);
+    m_context_stack.emplace(CodeGenerator::CodeGenContext::kLocal);
     p_function.visitBodyChildNodes(*this);
     m_context_stack.pop();
 
@@ -788,7 +831,7 @@ void CodeGenerator::visit(CompoundStatementNode &p_compound_statement) {
     // Reconstruct the scope for looking up the symbol entry.
     auto visit_ast_node = [&](auto &ast_node) { ast_node->accept(*this); };
     auto prev_sp = current_sp;
-    bool is_for_loop = m_context_stack.top() == CodeGenContext::kForLoop;
+    bool is_for_loop = m_context_stack.top() == CodeGenContext::kForLoopIfWhile;
     char inst_buf[1024];
     std::string local_inst_buf;
 
@@ -1036,6 +1079,10 @@ void CodeGenerator::visit(ReadNode &p_read) {
 }
 
 void CodeGenerator::visit(IfNode &p_if) {
+    std::string prev_inst_buf = std::move(m_Inst_buff);
+    m_Inst_buff.clear();
+    m_context_stack.emplace(CodeGenContext::kForLoopIfWhile);
+
     char inst_buf_c_str[1024];
     const auto &m_body = p_if.getBody();
     const auto &m_else_ptr = p_if.getElseBodyPtr();
@@ -1075,12 +1122,18 @@ void CodeGenerator::visit(IfNode &p_if) {
     snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
              "L%ld:\t\t\t\t# if end\n", end_label);
     m_Inst_buff += inst_buf_c_str;
+    m_Inst_buff = std::move(prev_inst_buf) + m_Inst_buff;
+    m_context_stack.pop();
 }
 
 void CodeGenerator::visit(WhileNode &p_while) {
+    std::string prev_inst_buf = std::move(m_Inst_buff);
+    m_Inst_buff.clear();
+
     long l1 = BranchLabel, l2 = BranchLabel + 1, l3 = BranchLabel + 2;
     BranchLabel += 3;
     char inst_buf_c_str[1024];
+    m_context_stack.emplace(CodeGenContext::kForLoopIfWhile);
 
     snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
              "L%lu:\t\t\t\t# while loop start\n", l1);
@@ -1099,11 +1152,14 @@ void CodeGenerator::visit(WhileNode &p_while) {
                   [&](auto &reg) { ReturnReg(reg); });
 
     const_cast<CompoundStatementNode &>(p_while.getBody()).accept(*this);
+
     snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
              "\tj L%ld\n"
              "L%ld:\t\t\t\t# while loop end\n",
              l1, l3);
     m_Inst_buff += inst_buf_c_str;
+    m_Inst_buff = std::move(prev_inst_buf) + m_Inst_buff;
+    m_context_stack.pop();
 }
 
 void CodeGenerator::visit(ForNode &p_for) {
@@ -1116,11 +1172,12 @@ void CodeGenerator::visit(ForNode &p_for) {
     size_t prev_sp = current_sp;
     char inst_buf_c_str[2048];
     std::string inst_buf, prev_inst_buf = std::move(m_Inst_buff);
+    m_Inst_buff.clear();
 
     auto const &lower = p_for.getLowerBound();
     auto const &upper = p_for.getUpperBound();
 
-    m_context_stack.emplace(CodeGenContext::kForLoop);
+    m_context_stack.emplace(CodeGenContext::kForLoopIfWhile);
     const_cast<std::unique_ptr<DeclNode> &>(p_for.getDeclNode())->accept(*this);
     const_cast<std::unique_ptr<AssignmentNode> &>(p_for.getInit())
         ->accept(*this);
@@ -1185,7 +1242,7 @@ void CodeGenerator::visit(ForNode &p_for) {
     m_context_stack.pop();
     m_symbol_manager.popScope();
     current_sp = prev_sp;
-    m_Inst_buff = std::move(prev_inst_buf) + inst_buf;
+    m_Inst_buff = std::move(prev_inst_buf) + std::move(inst_buf);
 }
 
 void CodeGenerator::visit(ReturnNode &p_return) {
