@@ -44,12 +44,6 @@ private:
     };
 
 public:
-    struct Inst_virt_reg {
-        bool true_inst;
-        size_t write_reg;
-        std::unique_ptr<std::vector<size_t>> read_regs;
-        std::string inst;
-    };
     enum class RiscvRegisterEnum : int8_t {
         NO_REG = -1,
         zero,
@@ -164,9 +158,59 @@ public:
         Operator op;
         size_t left, right;
     };
+    struct ThreeAddressCodeFuncInvocation {
+        FunctionInvocationNode *func;
+        std::vector<size_t> parameters;
+    };
     using ThreeAddressCodeEntry =
         std::variant<ConstantValueNode *, VariableReferenceNode *,
-                     FunctionInvocationNode *, ThreeAddressCodeOp>;
+                     ThreeAddressCodeFuncInvocation, ThreeAddressCodeOp>;
+    enum class Inst { call, sw, lw };
+    struct liveRange {
+        size_t start, end;
+        bool overlape(const liveRange &other) const {
+            return (end < other.start && start >= other.start) ||
+                   (end < other.end && start > other.end) ||
+                   (other.end < start && other.start >= start) ||
+                   (other.end <= end && other.start > end) ||
+                   (other.end == end);
+            // return start < other.end && other.start < end;
+        }
+    };
+    struct Inst_virt_reg {
+        size_t id;
+        bool true_inst;
+        bool is_function_call = false;
+        Inst function_inst;
+        ssize_t write_reg, n_argmument;
+        std::unique_ptr<std::vector<size_t *>> read_regs;
+        std::string inst;
+        std::set<size_t> liveIn, liveOut;
+        std::optional<std::vector<RiscvRegister>> real_reg_read;
+        std::optional<RiscvRegister> real_reg_write;
+
+        Inst_virt_reg(std::string inst, ssize_t write_reg,
+                      std::vector<size_t *> read_regs)
+            : true_inst(false), write_reg(write_reg), inst(std::move(inst)) {
+            this->read_regs =
+                std::make_unique<std::vector<size_t *>>(std::move(read_regs));
+        }
+        Inst_virt_reg(std::string inst, std::vector<size_t *> read_regs,
+                      size_t n_argmument)
+            : true_inst(false), is_function_call(true),
+              function_inst(Inst::call), write_reg(0), inst(std::move(inst)) {
+            this->read_regs =
+                std::make_unique<std::vector<size_t *>>(std::move(read_regs));
+        }
+        Inst_virt_reg(std::string inst, ssize_t write_reg)
+            : true_inst(false), write_reg(write_reg), read_regs(nullptr),
+              inst(std::move(inst)) {}
+        Inst_virt_reg(const std::string &inst) : true_inst(true), inst(inst) {}
+        Inst_virt_reg(Inst function_inst, ssize_t write_reg, size_t n_argmument)
+            : true_inst(false), is_function_call(true),
+              function_inst(function_inst), write_reg(write_reg),
+              n_argmument(n_argmument) {}
+    };
 
     // code could be Operator or other things
 private:
@@ -177,9 +221,11 @@ private:
     std::string m_Inst_buff;
 
     std::set<RiscvRegister> avaliable_reg;
+    std::set<RiscvRegister> function_used_reg;
     std::set<RiscvRegister> used_reg;
     std::vector<ThreeAddressCodeEntry> ThreeAddressCodeTable;
     std::vector<RiscvRegister> ThreeAddressCodeTableReg;
+    std::vector<SymbolEntry*> function_argument_entry;
 
     std::string m_source_file_path;
     std::unordered_map<SemanticAnalyzer::AstNodeAddr, SymbolManager::Table>
@@ -214,6 +260,7 @@ public:
             &&p_symbol_table_of_scoping_nodes);
 
     RiscvRegister GetAvailableReg();
+    RiscvRegister GetAvailableReg(RiscvRegister reg);
     void ReturnReg(RiscvRegister reg);
 
     SymbolEntry::KindEnum

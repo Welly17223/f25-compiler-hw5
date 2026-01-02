@@ -4,6 +4,7 @@
 #include "AST/FunctionInvocation.hpp"
 #include "AST/VariableReference.hpp"
 #include "AST/decl.hpp"
+#include "AST/expression.hpp"
 #include "AST/for.hpp"
 #include "AST/function.hpp"
 #include "AST/operator.hpp"
@@ -18,11 +19,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
+#include <list>
 #include <memory>
 #include <pstl/glue_execution_defs.h>
+#include <queue>
+#include <sstream>
 #include <string>
 #include <sys/types.h>
 #include <type_traits>
@@ -67,16 +73,6 @@ constexpr const char *const riscv_assembly_sw = "\taddi sp, sp, -4\n"
                                                 "\tsw %s, %d(%s)\n";
 constexpr const char *const riscv_assembly_lw = "\taddi sp, sp, 4\n"
                                                 "\tlw %s, %d(%s)\n";
-constexpr const char *const riscv_assmbly_load_constant_integer =
-    "\tli %s, %s\n";
-constexpr const char *const riscv_assembly_load_global =
-    "\tla %s, %s\t\t\t\t# load global variable address %s\n"
-    "\tlw %s, %d(%s)\n";
-constexpr const char *const riscv_assembly_load_local =
-    "\tlw %s, %ld(s0)\t\t\t# load local variable %s\n";
-constexpr const char *const riscv_assembly_op =
-    "\t%s %s, %s, %s\t\t\t# op reg1, reg1, reg2\n";
-
 CodeGenerator::CodeGenerator(
     const std::string &source_file_name, const std::string &save_path,
     std::unordered_map<SemanticAnalyzer::AstNodeAddr, SymbolManager::Table>
@@ -127,17 +123,6 @@ CodeGenerator::determineVarKind(const VariableNode &p_variable) const {
                                        : SymbolEntry::KindEnum::kVariableKind;
 }
 
-// NOTE: An anonymous namespace is used to define a function that is only
-// visible in the current translation unit, which is similar to the static
-// keyword in C.
-namespace {
-bool hasNonPositiveDimension(const PType *p_type) {
-    return std::any_of(p_type->getDimensions().begin(),
-                       p_type->getDimensions().end(),
-                       [](const int dim) { return dim <= 0; });
-}
-} // namespace
-
 bool CodeGenerator::isShadowingLoopVar(const std::string &p_name) const {
     auto to_be_shadowed = m_symbol_manager.lookup(p_name);
     return to_be_shadowed &&
@@ -149,23 +134,28 @@ bool CodeGenerator::isRedeclaringSymbol(const std::string &p_name) const {
 }
 
 CodeGenerator::RiscvRegister CodeGenerator::GetAvailableReg() {
+    if (avaliable_reg.size() == 0)
+        return RiscvRegisterEnum::NO_REG;
+
     auto reg = *avaliable_reg.begin();
     avaliable_reg.erase(reg);
-    if (reg.saved_callee()) {
-        dumpInstructions(m_output_file.get(), riscv_assembly_sw,
-                         reg.getNameCString(), 0LU, "sp");
-    }
     fprintf(stderr, "used: %s\n", reg.getNameCString());
+    return reg;
+}
+
+CodeGenerator::RiscvRegister CodeGenerator::GetAvailableReg(RiscvRegister reg) {
+    if (avaliable_reg.count(reg) == 0)
+        return RiscvRegisterEnum::NO_REG;
+
+    avaliable_reg.erase(reg);
+    used_reg.insert(reg);
+
     return reg;
 }
 
 void CodeGenerator::ReturnReg(RiscvRegister reg) {
     if (reg == RiscvRegisterEnum::zero)
         return;
-    if (reg.saved_callee()) {
-        dumpInstructions(m_output_file.get(), riscv_assembly_lw,
-                         reg.getNameCString(), 0LU, "sp");
-    }
     used_reg.erase(reg);
     avaliable_reg.insert(reg);
     fprintf(stderr, "return: %s\n", reg.getNameCString());
@@ -185,7 +175,25 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg,
 std::vector<CodeGenerator::RiscvRegister>
 CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
     std::vector<RiscvRegister> local_used_reg(ThreeAddressCodeTable.size());
+
     std::vector<size_t> local_used_virtual_reg(ThreeAddressCodeTable.size());
+    {
+        size_t reverse_count = ThreeAddressCodeTable.size() * 2;
+        /* std::for_each(ThreeAddressCodeTable.begin(),
+                      ThreeAddressCodeTable.end(), [&](const auto &e) {
+                          std::visit(
+                              overloaded{
+                                  [&](ThreeAddressFuncInvocation &arg) {
+                                      reverse_count +=
+                                          arg.func->getArguments().size();
+                                  },
+                                  [&](auto &arg) {},
+                              },
+                              e);
+                      }); */
+        local_used_virtual_reg.reserve(reverse_count);
+    }
+
     auto localThreeAddressCodeTable = std::move(ThreeAddressCodeTable);
 
     if (ret_reg != RiscvRegisterEnum::zero) {
@@ -196,356 +204,306 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
 
     std::unordered_map<std::string, RiscvRegister> var_ref_regs;
     std::unordered_map<std::string, size_t> var_ref_virtual_regs;
+    std::map<size_t, size_t> virtual_regs_ref_mapping;
     size_t virtual_mem_counter = 1;
-    std::vector<Inst_virt_reg> virt_reg_inst_stack;
+    auto get_virt_reg = [&]() -> size_t {
+        virtual_mem_counter++;
+        return virtual_mem_counter - 1;
+    };
+    std::list<Inst_virt_reg> virt_reg_inst_stack;
     std::stack<std::string> inst_stack;
 
-    fprintf(stderr, "start expr_handler: \n");
-    int ind = start_ind;
+    fprintf(stderr, "========== start expr_handler ==========\n");
+
+    std::unordered_map<std::string, size_t> VariableRefLastUsed;
+    size_t ind = start_ind;
+    std::for_each(
+        localThreeAddressCodeTable.begin(), localThreeAddressCodeTable.end(),
+        [&](const auto &e) {
+            std::visit(
+                overloaded{[&](VariableReferenceNode *arg) {
+                               VariableRefLastUsed[arg->getNameCString()] =
+                                   ind - start_ind;
+                           },
+                           [&](auto &arg) {}},
+                e);
+            ind++;
+        });
+
+    for (auto &i : VariableRefLastUsed) {
+        printf("%s: %ld\n", i.first.c_str(), i.second);
+    }
+
+    ind = start_ind;
     std::for_each(
         localThreeAddressCodeTable.begin() + start_ind,
         localThreeAddressCodeTable.end(), [&](const auto &e) {
-            RiscvRegister &p_expr_reg = local_used_reg[ind];
+            size_t &p_expr_virt_reg = local_used_virtual_reg[ind];
             bool dump_inst = true;
             char inst_buf_c_str[1024];
-            std::string pre_inst_buf, post_inst_buf;
+
+            std::vector<Inst_virt_reg> current_inst;
 
             std::visit(
                 overloaded{
                     [&](VariableReferenceNode *arg) {
-                        if (var_ref_regs.count(arg->getNameCString())) {
-                            p_expr_reg = var_ref_regs[arg->getNameCString()];
-                            dump_inst = false;
-                        } else if (p_expr_reg == 0) {
-                            auto avaliable_reg = GetAvailableReg();
-                            p_expr_reg = avaliable_reg;
-                            var_ref_regs[arg->getNameCString()] = avaliable_reg;
+                        long origional_virt_reg = p_expr_virt_reg;
+                        if (var_ref_virtual_regs.count(arg->getNameCString())) {
+                            virtual_regs_ref_mapping[p_expr_virt_reg] =
+                                var_ref_virtual_regs[arg->getNameCString()];
+
+                            p_expr_virt_reg =
+                                var_ref_virtual_regs[arg->getNameCString()];
+                        } else if (p_expr_virt_reg == 0) {
+                            p_expr_virt_reg = get_virt_reg();
+                            var_ref_virtual_regs[arg->getNameCString()] =
+                                p_expr_virt_reg;
+                        } else {
+                            var_ref_virtual_regs[arg->getNameCString()] =
+                                p_expr_virt_reg;
                         }
+
+                        if (ind != VariableRefLastUsed[arg->getName()]) {
+                            dump_inst = false;
+                        }
+
                         auto const &entry =
                             m_symbol_manager.lookup(arg->getNameCString());
 
-                        fprintf(stderr, "%d VariableReferenceNode %s reg: %s\n",
-                                ind, entry->getNameCString(),
-                                local_used_reg[ind].getNameCString());
+                        fprintf(stderr,
+                                "%lu VariableReferenceNode %s reg: tmp%ld, "
+                                "origional: %ld\n",
+                                ind, entry->getNameCString(), p_expr_virt_reg,
+                                origional_virt_reg);
 
                         if (entry->getLevel() == 0) {
-                            snprintf(inst_buf_c_str, 1023,
-                                     riscv_assembly_load_global,
-                                     p_expr_reg.getNameCString(),
-                                     entry->getNameCString(),
-                                     entry->getNameCString(),
-                                     p_expr_reg.getNameCString(), 0,
-                                     p_expr_reg.getNameCString());
+                            char temp[64];
+                            local_used_virtual_reg.emplace_back(get_virt_reg());
+                            snprintf(temp, 63, "la %%s, %s",
+                                     entry->getNameCString());
+
+                            size_t &temp_virt_reg =
+                                local_used_virtual_reg.back();
+                            current_inst.emplace_back(temp, temp_virt_reg);
+
+                            snprintf(temp, 63, "lw %%s, 0(%%s)");
+                            current_inst.emplace_back(
+                                temp, p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    &temp_virt_reg});
                         } else {
-                            snprintf(inst_buf_c_str, 1023,
-                                     riscv_assembly_load_local,
-                                     p_expr_reg.getNameCString(),
-                                     entry->getSp(), entry->getNameCString());
+                            char temp[64];
+                            snprintf(temp, 63, "lw %%s, %ld(s0)",
+                                     entry->getSp());
+                            current_inst.emplace_back(temp, p_expr_virt_reg);
                         }
                     },
-                    [&](FunctionInvocationNode *arg) {
-                        if (p_expr_reg == 0)
-                            p_expr_reg = GetAvailableReg();
+                    [&](const ThreeAddressCodeFuncInvocation &arg) {
+                        if (p_expr_virt_reg == 0)
+                            p_expr_virt_reg = get_virt_reg();
 
-                        auto const &parameters = arg->getArguments();
-                        size_t arg_index = 0;
-                        std::string func_invocation_inst_buf,
-                            func_invocation_inst_buf_pre,
-                            func_invocation_inst_buf_post;
+                        std::string func_invocation_inst_buf_pre;
 
-                        // handle caller saved register
-                        size_t reused_count = 0;
-                        bool reuse_argument_reg = false;
-                        std::set<RiscvRegister> saved_reg;
+                        std::vector<Inst_virt_reg> parameters_inst;
+                        std::vector<size_t *> parameters_tmp_register(
+                            arg.func->getArguments().size());
+                        size_t arg_length = arg.func->getArguments().size();
 
-                        for (auto const &argu_reg : used_reg) {
-                            if (argu_reg.saved_caller() &&
-                                argu_reg != p_expr_reg &&
-                                (!saved_reg.count(argu_reg))) {
-                                saved_reg.emplace(argu_reg);
-                                reuse_argument_reg = true;
-                                snprintf(
-                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tsw %s, %ld(sp)\t\t\t# save caller "
-                                    "preserved "
-                                    "register %s\t\t\t\n",
-                                    argu_reg.getNameCString(), 4 * reused_count,
-                                    argu_reg.getNameCString());
-                                func_invocation_inst_buf_pre +=
-                                    std::move(inst_buf_c_str);
-
-                                snprintf(
-                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tlw %s, %ld(sp)\t\t\t# load caller "
-                                    "preserved "
-                                    "argument register %s\t\t\t\n",
-                                    argu_reg.getNameCString(), 4 * reused_count,
-                                    argu_reg.getNameCString());
-                                func_invocation_inst_buf_post +=
-                                    std::move(inst_buf_c_str);
-                                reused_count++;
-                            }
-                        }
-
-                        for (auto const &argu_reg : local_used_reg) {
-                            if (argu_reg.saved_caller() &&
-                                argu_reg != p_expr_reg &&
-                                (!saved_reg.count(argu_reg))) {
-                                saved_reg.emplace(argu_reg);
-                                reuse_argument_reg = true;
-                                snprintf(
-                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tsw %s, %ld(sp)\t\t\t# save caller "
-                                    "preserved "
-                                    "register %s\n",
-                                    argu_reg.getNameCString(), 4 * reused_count,
-                                    argu_reg.getNameCString());
-                                func_invocation_inst_buf_pre +=
-                                    std::move(inst_buf_c_str);
-
-                                snprintf(
-                                    inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                    "\tlw %s, %ld(sp)\t\t\t# load caller "
-                                    "preserved "
-                                    "argument register %s\t\t\t\n",
-                                    argu_reg.getNameCString(), 4 * reused_count,
-                                    argu_reg.getNameCString());
-                                func_invocation_inst_buf_post +=
-                                    std::move(inst_buf_c_str);
-                                reused_count++;
-                            }
-                        }
-
-                        if (reuse_argument_reg) {
-                            current_sp += reused_count * 4;
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, -%ld\n", reused_count * 4);
-                            func_invocation_inst_buf_pre =
-                                std::move(inst_buf_c_str) +
-                                std::move(func_invocation_inst_buf_pre);
-
-                            /* m_Inst_buff +=
-                                std::move(func_invocation_inst_buf_pre); */
-
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, %ld\n", reused_count * 4);
-                            func_invocation_inst_buf_post +=
-                                std::move(inst_buf_c_str);
-                        }
-
-                        // saved parameters to register
-                        if (parameters.size() >= 8) {
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, -%ld\t\t\t# increase "
-                                     "parameters stack\n",
-                                     (parameters.size() - 8) << 2);
-                            func_invocation_inst_buf_pre += inst_buf_c_str;
-                            // m_Inst_buff += std::move(inst_buf_c_str);
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\taddi sp, sp, %ld\t\t\t# decrease "
-                                     "parameters stack\n",
-                                     (parameters.size() - 8) << 2);
-                            func_invocation_inst_buf_post +=
-                                std::move(inst_buf_c_str);
-                        }
-                        std::for_each(
-                            parameters.begin(), parameters.end(),
-                            [&](std::unique_ptr<ExpressionNode> const &arg) {
-                                fprintf(stderr, "handle %ld argument\n",
-                                        arg_index);
-                                ThreeAddressCodeTable.clear();
-
-                                const_cast<std::unique_ptr<ExpressionNode> &>(
-                                    arg)
-                                    ->accept(*this);
-
-                                auto parameters_expr_res = ({
-                                    std::vector<RiscvRegister> temp;
-                                    if (arg_index < 8) {
-                                        temp = expr_handler(
-                                            0, ArgumentRegisters[arg_index],
-                                            func_invocation_inst_buf_pre);
-                                    } else {
-                                        temp = expr_handler(
-                                            0, RiscvRegisterEnum::zero,
-                                            func_invocation_inst_buf_pre);
-                                    }
-                                    std::move(temp);
-                                });
-
-                                RiscvRegister res_arg = parameters_expr_res[0];
-
-                                if (arg_index < 8) {
-                                    // Note: saved to argument register in
-                                    // previous stage
-                                    inst_buf_c_str[0] = '\0';
-                                } else {
-                                    snprintf(inst_buf_c_str,
-                                             sizeof(inst_buf_c_str) - 1,
-                                             "\tsw %s, %ld(sp)\t\t\t# save "
-                                             "%ld parameters\n",
-                                             res_arg.getNameCString(),
-                                             (arg_index - 8) * 4, arg_index);
-                                    func_invocation_inst_buf_pre +=
-                                        inst_buf_c_str;
-                                    // m_Inst_buff += std::move(inst_buf_c_str);
-                                    inst_buf_c_str[0] = '\0';
-                                }
-
-                                while (!m_Inst_stack.empty()) {
-                                    func_invocation_inst_buf +=
-                                        std::move(m_Inst_stack.top());
-                                    m_Inst_stack.pop();
-                                }
-
-                                for (auto const &i : parameters_expr_res) {
-                                    if (i == p_expr_reg ||
-                                        (arg_index <
-                                             sizeof(ArgumentRegisters) &&
-                                         i == ArgumentRegisters[arg_index]))
-                                        continue;
-                                    ReturnReg(i);
-                                }
-
-                                func_invocation_inst_buf +=
-                                    std::move(inst_buf_c_str);
-
-                                arg_index++;
-                            });
-
-                        current_sp -= reused_count * 4;
                         fprintf(stderr,
-                                "%d FunctionInvocationNode %s reg: %s\n", ind,
-                                arg->getNameCString(),
-                                p_expr_reg.getNameCString());
+                                "%lu FunctionInvocationNode %s reg: tmp%ld "
+                                "argument reg: ",
+                                ind, arg.func->getNameCString(),
+                                p_expr_virt_reg);
 
-                        pre_inst_buf +=
-                            std::move(func_invocation_inst_buf_pre) +
-                            std::move(func_invocation_inst_buf);
-                        post_inst_buf +=
-                            std::move(func_invocation_inst_buf_post);
+                        for (auto &i : arg.parameters) {
+                            fprintf(stderr, "%lu ", i);
+                        }
+                        fputs("\n", stderr);
 
-                        if (p_expr_reg != RiscvRegisterEnum::a0)
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\tcall %s\t\t\t\t# call function\n"
-                                     "\tmv %s, a0\t\t\t\t# move return value "
-                                     "to dest register\n",
-                                     arg->getNameCString(),
-                                     p_expr_reg.getNameCString());
-                        else
-                            snprintf(inst_buf_c_str, sizeof(inst_buf_c_str) - 1,
-                                     "\tcall %s\t\t\t\t# call function\n"
-                                     "\t\t\t\t\t\t\t# dest register is %s\n",
-                                     arg->getNameCString(),
-                                     p_expr_reg.getNameCString());
+                        // FIXME: save argmuent register and other caller saved
+                        // register
+
+                        // add parameters and save it to temp register
+                        for (auto &i : parameters_inst) {
+                            current_inst.emplace_back(std::move(i));
+                        }
+
+                        // move register to argument register
+                        char temp[64];
+                        if (arg_length > 8) {
+                            snprintf(temp, 63, "\taddi sp, sp, -%ld\n",
+                                     (arg_length - 8) * 4);
+                            current_inst.emplace_back(temp);
+                        }
+                        for (size_t i = 0; i < arg_length; i++) {
+                            parameters_tmp_register[i] =
+                                &local_used_virtual_reg[arg.parameters[i]];
+
+                            std::optional<Inst_virt_reg> temp_inst;
+                            if (i < 8) {
+                                snprintf(temp, 63, "mv %s, %%s",
+                                         ArgumentRegisters[i].getNameCString());
+                                temp_inst.emplace(
+                                    temp, 0,
+                                    std::initializer_list<size_t *>{
+                                        parameters_tmp_register[i]});
+                                temp_inst.value().real_reg_write.emplace(
+                                    ArgumentRegisters[i]);
+                            } else {
+                                snprintf(temp, 63, "sw %%s, %ld(sp)",
+                                         (((long)i) - 8) * 4);
+                                temp_inst.emplace(
+                                    temp, 0,
+                                    std::initializer_list<size_t *>{
+                                        parameters_tmp_register[i]});
+                            }
+                            current_inst.emplace_back(
+                                std::move(temp_inst.value()));
+                        }
+
+                        // function call
+                        snprintf(temp, 63, "\tcall %s\n",
+                                 arg.func->getNameCString());
+                        current_inst.emplace_back(
+                            temp, std::initializer_list<size_t *>{},
+                            arg.func->getArguments().size());
+                        auto &virt_reg_inst = current_inst.back();
+
+                        if (arg_length > 0) {
+                            auto &real_reg_list =
+                                virt_reg_inst.real_reg_read.emplace();
+                            size_t accu_arg_reg =
+                                arg_length < 8 ? arg_length : 8;
+
+                            for (size_t i = 0; i < accu_arg_reg; i++) {
+                                real_reg_list.emplace_back(
+                                    ArgumentRegisters[i]);
+                            }
+
+                            /* fputs("read: ", stderr);
+                            for (auto &i :
+                                 virt_reg_inst.real_reg_read.value()) {
+                                fprintf(stderr, "%s", i.getNameCString());
+                            }
+                            fputs("\n", stderr); */
+                        }
+
+                        if (arg_length > 8) {
+                            snprintf(temp, 63, "\taddi sp, sp, %ld\n",
+                                     (arg_length - 8) * 4);
+                            current_inst.emplace_back(temp);
+                        }
+
+                        // function return value
+                        current_inst.emplace_back("mv %s, a0", p_expr_virt_reg);
                     },
                     [&](ConstantValueNode *arg) {
-                        if (p_expr_reg == 0)
-                            p_expr_reg = GetAvailableReg();
+                        if (p_expr_virt_reg == 0)
+                            p_expr_virt_reg = get_virt_reg();
 
-                        fprintf(stderr, "%d ConstantValueNode %s reg: %s\n",
-                                ind, arg->getConstantValueCString(),
-                                local_used_reg[ind].getNameCString());
-
+                        char temp[64];
                         snprintf(
-                            inst_buf_c_str, 1023,
-                            riscv_assmbly_load_constant_integer,
-                            p_expr_reg.getNameCString(),
+                            temp, 63, "li %%s, %s",
                             arg->getConstantPtr()->getConstantValueCString());
+
+                        current_inst.emplace_back(temp, p_expr_virt_reg);
                     },
                     [&](const ThreeAddressCodeOp &arg) {
-                        if (p_expr_reg == 0) {
-                            p_expr_reg = GetAvailableReg();
+                        // alloc virt reg
+                        if (p_expr_virt_reg == 0)
+                            p_expr_virt_reg = get_virt_reg();
+
+                        // local_used_virtual_reg[arg.left] = get_virt_reg();
+                        size_t *virt_reg_left =
+                                   &local_used_virtual_reg[arg.left],
+                               *virt_reg_right =
+                                   &local_used_virtual_reg[arg.right];
+
+                        if (arg.right != 0) {
+                            // virt_reg_right = get_virt_reg();
                         }
 
-                        auto &reg_left = local_used_reg[arg.left],
-                             &reg_right = local_used_reg[arg.right];
-                        reg_left = local_used_reg[ind];
-
-                        if (arg.right != 0)
-                            reg_right = GetAvailableReg();
-
-                        fprintf(stderr, "%d Op left: %ld right: %ld reg: %s\n",
-                                ind, arg.left, arg.right,
-                                local_used_reg[ind].getNameCString());
+                        fprintf(stderr,
+                                "%lu Op reg: tmp%ld, left[%ld]: %ld, "
+                                "right[%ld]: %ld\n",
+                                ind, p_expr_virt_reg, arg.left, *virt_reg_left,
+                                arg.right, *virt_reg_right);
                         switch (arg.op) {
                         case Operator::kNegOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\tneg %s, %s\t\t\t# neg op\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "neg %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{virt_reg_left});
                             break;
                         case Operator::kNotOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\txori %s, %s, 1\t\t\t# Not op\n"
-                                     "\taddi %s, %s, 0xff\t\t\t# Not op\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "xori %s, %s, 1", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{virt_reg_left});
+                            current_inst.emplace_back(
+                                "addi %s, %s, 0xff", get_virt_reg(),
+                                std::initializer_list<size_t *>{
+                                    &p_expr_virt_reg});
                             break;
                         case Operator::kLessOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\tslt %s, %s, %s\t\t\t# less op\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_right.getNameCString());
+                            current_inst.emplace_back(
+                                "slt %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
                             break;
                         case Operator::kLessOrEqualOp:
-                            snprintf(
-                                inst_buf_c_str, 1023,
-                                "\tsgt %s, %s, %s\t\t\t# less or equal op\n"
-                                "\txori %s, %s, 1\n",
-                                reg_left.getNameCString(),
-                                reg_left.getNameCString(),
-                                reg_right.getNameCString(),
-                                reg_left.getNameCString(),
-                                reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "sgt %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
+                            current_inst.emplace_back(
+                                "xori %s, %s, 1", get_virt_reg(),
+                                std::initializer_list<size_t *>{
+                                    &p_expr_virt_reg});
                             break;
                         case Operator::kGreaterOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\tsgt %s, %s, %s\t\t\t# greater op\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_right.getNameCString());
+                            current_inst.emplace_back(
+                                "sgt %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
                             break;
                         case Operator::kGreaterOrEqualOp:
-                            snprintf(
-                                inst_buf_c_str, 1023,
-                                "\tslt %s, %s, %s\t\t\t# greater or equal op\n"
-                                "\txori %s, %s, 1\n",
-                                reg_left.getNameCString(),
-                                reg_left.getNameCString(),
-                                reg_right.getNameCString(),
-                                reg_left.getNameCString(),
-                                reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "slt %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
+                            current_inst.emplace_back(
+                                "xori %s, %s, 1", get_virt_reg(),
+                                std::initializer_list<size_t *>{
+                                    &p_expr_virt_reg});
                             break;
                         case Operator::kEqualOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\tsub %s, %s, %s\t\t\t# eq operator\n"
-                                     "\tseqz %s, %s\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_right.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "sub %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
+                            current_inst.emplace_back(
+                                "seqz %s, %s", get_virt_reg(),
+                                std::initializer_list<size_t *>{
+                                    &p_expr_virt_reg});
                             break;
                         case Operator::kNotEqualOp:
-                            snprintf(inst_buf_c_str, 1023,
-                                     "\tsub %s, %s, %s\t\t\t# neq operator\n"
-                                     "\tsnez %s, %s\n",
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_right.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString());
+                            current_inst.emplace_back(
+                                "sub %s, %s, %s", p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
+                            current_inst.emplace_back(
+                                "snez %s, %s, 1", get_virt_reg(),
+                                std::initializer_list<size_t *>{
+                                    &p_expr_virt_reg});
                             break;
                         default:
-                            snprintf(inst_buf_c_str, 1023, riscv_assembly_op,
-                                     kOpInstr[(uint8_t)arg.op],
-                                     reg_left.getNameCString(),
-                                     reg_left.getNameCString(),
-                                     reg_right.getNameCString());
+                            char temp[64];
+                            snprintf(temp, 63, "%s %%s, %%s, %%s",
+                                     kOpInstr[(size_t)arg.op]);
+
+                            current_inst.emplace_back(
+                                temp, p_expr_virt_reg,
+                                std::initializer_list<size_t *>{
+                                    virt_reg_left, virt_reg_right});
                         }
                     },
                     [&](const auto &arg) { fprintf(stderr, "Unknown\n"); }},
@@ -553,19 +511,396 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
             ind++;
             if (dump_inst) {
                 std::string inst_buf;
-                inst_buf += std::move(pre_inst_buf) +
-                            std::move(inst_buf_c_str) +
-                            std::move(post_inst_buf);
+                inst_buf += std::move(inst_buf_c_str);
                 inst_stack.emplace(std::move(inst_buf));
+
+                std::for_each(current_inst.rbegin(), current_inst.rend(),
+                              [&](Inst_virt_reg &inst) {
+                                  virt_reg_inst_stack.emplace_back(
+                                      std::move(inst));
+                              });
             }
         });
-    puts("");
 
-    while (!inst_stack.empty()) {
-        m_Inst_buff += inst_stack.top();
-        inst_stack.pop();
+    // virtual register attribute
+    size_t origional_sp = current_sp;
+    std::vector<liveRange> virt_reg_live_range(virtual_mem_counter);
+    std::vector<RiscvRegister> virt_real_reg_map(virtual_mem_counter);
+    std::vector<size_t> virt_reg_memory(virtual_mem_counter);
+    std::vector<bool> virt_reg_cross_function_call(virtual_mem_counter);
+    std::vector<bool> virt_reg_is_spilled(virtual_mem_counter);
+    std::vector<size_t> virt_reg_spilled_sp(virtual_mem_counter);
+    std::vector<size_t> function_call_index;
+
+    std::map<RiscvRegister, std::vector<liveRange>> real_reg_mat;
+
+    // Give id to each instructions
+    {
+        size_t inst_ind = 0;
+        std::for_each(
+            virt_reg_inst_stack.begin(), virt_reg_inst_stack.end(),
+            [&](Inst_virt_reg &inst) {
+                inst.id = inst_ind;
+                inst_ind += 2;
+                if (inst.is_function_call && inst.function_inst == Inst::call) {
+                    function_call_index.emplace_back(inst.id);
+                }
+                if (inst.is_function_call && inst.function_inst == Inst::lw) {
+                    for (int i = 0; i < 8; i++) {
+                        size_t offset = inst.n_argmument * 2;
+                        real_reg_mat[ArgumentRegisters[i]].emplace_back(
+                            liveRange{inst.id,
+                                      inst.id > offset ? inst.id - offset : 0});
+                    }
+                }
+            });
     }
 
+    // compute virtual register live cycle
+    // FIX: allocate s1~s9 to virtual register crossing the functino call
+    for (int i = 0; i < 32; i++) {
+        auto reg = RiscvRegister(i);
+        std::vector<liveRange> v;
+        if (reg.saved_callee() ^ reg.saved_caller()) {
+            real_reg_mat[reg] = v;
+        }
+    }
+
+    // for compute real register live cycle
+    std::map<RiscvRegister, size_t> real_reg_start_time;
+
+    for (auto it = virt_reg_inst_stack.begin(); it != virt_reg_inst_stack.end();
+         it++) {
+        if (it->true_inst)
+            continue;
+
+        if (it == virt_reg_inst_stack.begin())
+            continue;
+
+        for (auto j = std::prev(it); j != virt_reg_inst_stack.begin(); j--) {
+            it->liveOut.insert(j->liveIn.begin(), j->liveIn.end());
+        }
+
+        // used
+        if (it->read_regs)
+            for (auto &j : *it->read_regs) {
+                it->liveIn.insert(*j);
+            }
+
+        it->liveIn.insert(it->liveOut.begin(), it->liveOut.end());
+
+        // erase var that defined in the block
+        it->liveIn.erase(it->write_reg);
+
+        // calculate argument live time
+        if (it->real_reg_write.has_value()) {
+            real_reg_mat[it->real_reg_write.value()].emplace_back(
+                liveRange{.start = it->id, .end = it->id});
+
+            real_reg_start_time.erase(it->real_reg_write.value());
+            printf("%s start at %ld\n",
+                   it->real_reg_write.value().getNameCString(), it->id);
+        }
+
+        if (it->real_reg_read.has_value()) {
+            for (auto &j : it->real_reg_read.value()) {
+                printf("%s end at %ld\n", j.getNameCString(), it->id);
+                real_reg_start_time[j] = it->id;
+            }
+        }
+    }
+
+    for (auto it = virt_reg_inst_stack.rbegin();
+         it != virt_reg_inst_stack.rend(); it++) {
+        if (it->true_inst || it->is_function_call)
+            continue;
+        // Every temp reg only be written once
+        if (it->write_reg != -1)
+            virt_reg_live_range[it->write_reg].start = it->id;
+
+        if (!it->liveOut.count(it->write_reg)) {
+            virt_reg_live_range[it->write_reg].end = it->id;
+        }
+
+        if (it->read_regs) {
+            const auto &read_regs = it->read_regs;
+            for (const auto &j : *read_regs) {
+                if (!it->liveOut.count(*j)) {
+                    virt_reg_live_range[*j].end = it->id;
+                }
+            }
+        }
+    }
+
+    // check if the tmp register cross function
+    for (auto it = virt_reg_live_range.begin() + 1;
+         it != virt_reg_live_range.end(); it++) {
+        size_t index = std::distance(virt_reg_live_range.begin(), it);
+        bool is_cross_function = false;
+
+        for (auto &j : function_call_index) {
+            if (it->start > j && j > it->end) {
+                is_cross_function = true;
+
+                break;
+            }
+        }
+        virt_reg_cross_function_call[index] = is_cross_function;
+    }
+
+    // assign interval that used argument register
+
+    // assign actual register
+    for (auto current = virt_reg_live_range.begin() + 1;
+         current != virt_reg_live_range.end(); current++) {
+        size_t ind = std::distance(virt_reg_live_range.begin(), current);
+
+        bool is_free = true;
+
+        for (auto &i : real_reg_mat) {
+            is_free = true;
+            // printf("try %s:\n", i.first.getNameCString());
+
+            // Assign tmp register that will cross function call to s1~s9
+            if (virt_reg_cross_function_call[ind] == true &&
+                !i.first.saved_callee()) {
+                is_free = false;
+                continue;
+            }
+
+            for (auto &j : i.second) {
+                if (j.overlape(*current)) {
+                    is_free = false;
+                    break;
+                }
+            }
+
+            if (is_free == true) {
+                /* printf("done, tmp%ld choosing %s\n\n", ind,
+                       i.first.getNameCString()); */
+                virt_real_reg_map[ind] = i.first;
+                function_used_reg.insert(i.first);
+                i.second.emplace_back(*current);
+                break;
+            }
+        }
+
+        if (is_free) {
+            virt_reg_is_spilled[ind] = false;
+            continue;
+        }
+
+        // Spill
+        virt_reg_is_spilled[ind] = true;
+        virt_reg_spilled_sp[ind] = current_sp;
+        current_sp += 4;
+    }
+
+    for (size_t i = 1LU; i < virt_real_reg_map.size(); i++) {
+        fprintf(stderr, "tmp%lu: [%ld, %ld] %s\n", i,
+                virt_reg_live_range[i].start, virt_reg_live_range[i].end,
+                virt_real_reg_map[i].getNameCString());
+    }
+    for (auto &i : real_reg_mat) {
+        fprintf(stderr, "%s: ", i.first.getNameCString());
+        for (auto &j : i.second) {
+            fprintf(stderr, "{%lu, %ld} ", j.start, j.end);
+        }
+        fputs("\n", stderr);
+    }
+    for (auto it = virt_reg_inst_stack.rbegin();
+         it != virt_reg_inst_stack.rend(); it++) {
+        auto &i = *it;
+        if (i.true_inst || i.is_function_call)
+            continue;
+        int space_len = 20;
+        printf("%-*s", space_len, i.inst.c_str());
+        if (i.write_reg != -1)
+            printf("write: %s(tmp%ld)\t",
+                   virt_real_reg_map[i.write_reg].getNameCString(),
+                   i.write_reg);
+        if (i.read_regs) {
+            printf("read: ");
+            for (auto &j : *i.read_regs)
+                printf("%s(tmp%ld) ", virt_real_reg_map[*j].getNameCString(),
+                       *j);
+        }
+        puts("");
+    }
+
+    if (ret_reg != RiscvRegisterEnum::zero) {
+        auto it = virt_reg_inst_stack.begin();
+        while ((it->true_inst || it->is_function_call)) {
+            it = std::next(it);
+            assert(it != virt_reg_inst_stack.end());
+        }
+        virt_real_reg_map[it->write_reg] = ret_reg;
+    }
+
+    std::set<RiscvRegister> func_used_reg;
+    for (auto it = virt_reg_inst_stack.rbegin();
+         it != virt_reg_inst_stack.rend(); it++) {
+        char temp_buf[2048] = {0};
+        char temp_buf_end[4096] = {0};
+        if (it->true_inst) {
+            m_Inst_buff += it->inst;
+        } else if (it->is_function_call) {
+            size_t ind = std::distance(virt_reg_inst_stack.rbegin(), it);
+
+            switch (it->function_inst) {
+            case Inst::sw: {
+                int local_ind_counter = 0;
+                if (func_used_reg.size() > 0) {
+
+                    for (auto &i : func_used_reg) {
+                        snprintf(
+                            temp_buf, sizeof(temp_buf) - 1,
+                            "\tlw %s, %d(sp)\t\t\t# func call load register\n",
+                            i.getNameCString(), local_ind_counter * 4);
+                        local_ind_counter++;
+                        m_Inst_buff += temp_buf;
+                    }
+                    snprintf(temp_buf, sizeof(temp_buf) - 1,
+                             "\taddi sp, sp, %lu\t\t\t# func call %lu load\n",
+                             func_used_reg.size() * 4, func_used_reg.size());
+                    m_Inst_buff += temp_buf;
+                }
+            } break;
+            case Inst::lw: {
+                int local_ind_counter = 0;
+                auto local_it = std::next(it);
+                while (!(local_it->is_function_call &&
+                         local_it->function_inst == Inst::sw) &&
+                       local_it != virt_reg_inst_stack.rend()) {
+                    local_it = std::next(local_it);
+                }
+                size_t sw_offset = std::distance(it, local_it) * 2;
+                sprintf(temp_buf, "\t# %lu check overlape at %lu %lu\n", ind,
+                        it->id, it->id - sw_offset);
+                m_Inst_buff += temp_buf;
+
+                for (long i = 1; i < (long)virt_real_reg_map.size(); i++) {
+                    sprintf(temp_buf, "\t# cmp at tmp%ld [%ld, %ld]: %s\n", i,
+                            virt_reg_live_range[i].start,
+                            virt_reg_live_range[i].end,
+                            virt_real_reg_map[i].getNameCString());
+                    m_Inst_buff += temp_buf;
+                    if (i != it->write_reg &&
+                        virt_reg_live_range[i].start >= it->id &&
+                        virt_reg_live_range[i].overlape(
+                            liveRange{it->id, it->id - sw_offset})) {
+                        func_used_reg.insert(
+                            virt_real_reg_map[local_ind_counter]);
+                    }
+                    local_ind_counter++;
+                }
+
+                if (func_used_reg.size() > 0) {
+                    snprintf(temp_buf, sizeof(temp_buf) - 1,
+                             "\taddi sp, sp, -%lu\t\t\t# func call %lu saved\n",
+                             func_used_reg.size() << 2,
+                             func_used_reg.size() + 1);
+                    m_Inst_buff += temp_buf;
+
+                    local_ind_counter = 0;
+                    for (auto &i : func_used_reg) {
+                        snprintf(
+                            temp_buf, sizeof(temp_buf) - 1,
+                            "\tsw %s, %d(sp)\t\t\t# func call save register\n",
+                            i.getNameCString(), local_ind_counter * 4);
+                        local_ind_counter++;
+                        m_Inst_buff += temp_buf;
+                    }
+                }
+            } break;
+            case Inst::call:
+                m_Inst_buff += it->inst;
+                break;
+            }
+        } else {
+            size_t read_regs_length = 0;
+            if (it->read_regs)
+                read_regs_length = it->read_regs->size();
+
+            RiscvRegister &write_reg = virt_real_reg_map[it->write_reg];
+            auto getRealReg = [&](std::unique_ptr<std::vector<size_t *>> &regs,
+                                  size_t ind) -> RiscvRegister & {
+                return virt_real_reg_map[*(*regs)[ind]];
+            };
+
+            if (it->write_reg != 0) {
+                switch (read_regs_length) {
+                default:
+                case 0:
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             write_reg.getNameCString());
+                    break;
+                case 1:
+                    if (strncmp("mv", it->inst.c_str(), 2) == 0 &&
+                        write_reg == virt_real_reg_map[*(*it->read_regs)[0]]) {
+                    }
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             write_reg.getNameCString(),
+                             getRealReg(it->read_regs, 0).getNameCString());
+                    break;
+                case 2:
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             write_reg.getNameCString(),
+                             getRealReg(it->read_regs, 0).getNameCString(),
+                             getRealReg(it->read_regs, 1).getNameCString());
+                    break;
+                case 3:
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             write_reg.getNameCString(),
+                             getRealReg(it->read_regs, 0).getNameCString(),
+                             getRealReg(it->read_regs, 1).getNameCString(),
+                             getRealReg(it->read_regs, 2).getNameCString());
+                    break;
+                }
+            } else {
+                switch (read_regs_length) {
+                case 0:
+                    memcpy(temp_buf, it->inst.c_str(), it->inst.size());
+                    break;
+                case 1:
+                    if (strncmp("mv", it->inst.c_str(), 2) == 0 &&
+                        write_reg == virt_real_reg_map[*(*it->read_regs)[0]]) {
+                    }
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             getRealReg(it->read_regs, 0).getNameCString());
+                    break;
+                case 2:
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             getRealReg(it->read_regs, 0).getNameCString(),
+                             getRealReg(it->read_regs, 1).getNameCString());
+                    break;
+                case 3:
+                    snprintf(temp_buf, sizeof(temp_buf) - 1, it->inst.c_str(),
+                             getRealReg(it->read_regs, 0).getNameCString(),
+                             getRealReg(it->read_regs, 1).getNameCString(),
+                             getRealReg(it->read_regs, 2).getNameCString());
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            snprintf(temp_buf_end, sizeof(temp_buf_end) - 1,
+                     "\t%s\t\t\t# place: %ld\n", temp_buf, it->id);
+
+            m_Inst_buff += temp_buf_end;
+        }
+    }
+
+    for (auto &i : virt_reg_inst_stack) {
+        if (!(i.true_inst || i.is_function_call)) {
+            local_used_reg[start_ind] = virt_real_reg_map[i.write_reg];
+            break;
+        }
+    }
+    GetAvailableReg(local_used_reg[start_ind]);
+
+    current_sp = origional_sp;
     return local_used_reg;
 }
 
@@ -631,6 +966,26 @@ void CodeGenerator::visit(ProgramNode &p_program) {
     dumpInstructions(m_output_file.get(), riscv_assembly_main_func_end);
 
     while (!m_Inst_glob_stack.empty()) {
+        size_t funcoffset = 8;
+        std::stringstream ss(std::move(m_Inst_buff));
+        m_Inst_buff.clear();
+        char inst_buf[1024];
+        while (ss.getline(inst_buf, 1023)) {
+            if (strncmp(inst_buf, "return", 7) == 0) {
+                char temp_buf[1024];
+                snprintf(temp_buf, sizeof(temp_buf) - 1,
+                         "\tlw ra, 0(s0)\n"
+                         "\taddi sp, s0, %lu\n"
+                         "\tlw s0, 4(s0)\n"
+                         "\tjr ra\t\t\t\t# return\n",
+                         funcoffset);
+                m_Inst_buff += temp_buf;
+            } else {
+                m_Inst_buff += inst_buf;
+                m_Inst_buff += '\n';
+            }
+        }
+
         dumpInstructions(m_output_file.get(), m_Inst_glob_stack.top().c_str());
         m_Inst_glob_stack.pop();
     }
@@ -753,6 +1108,7 @@ void CodeGenerator::visit(VariableNode &p_variable) {
             const_cast<SymbolEntry *>(entry)->setSp(
                 -((function_arg_index - 8) << 2) - 12);
         }
+        function_argument_entry.emplace_back(const_cast<SymbolEntry *>(entry));
 
         function_arg_index++;
         break;
@@ -784,15 +1140,13 @@ void CodeGenerator::visit(FunctionNode &p_function) {
         "\t.size %s, .-%s\n";
 
     auto prev_sp = current_sp;
+    function_used_reg.clear();
     current_sp = 0;
+    std::string function_pre_return;
 
     m_context_stack.emplace(CodeGenContext::kFunction);
     m_symbol_manager.pushScope(
         std::move(m_symbol_table_of_scoping_nodes.at(&p_function)));
-
-    dumpInstructions(m_output_file.get(), riscv_assembly_function_start_label,
-                     p_function.getNameCString(), p_function.getNameCString(),
-                     p_function.getNameCString());
 
     std::string argument_inst_buf;
     auto &parameters = p_function.getParameters();
@@ -810,9 +1164,52 @@ void CodeGenerator::visit(FunctionNode &p_function) {
     p_function.visitBodyChildNodes(*this);
     m_context_stack.pop();
 
+    std::string pre_func;
+    for (auto &reg : function_used_reg) {
+        char buf[64];
+        if (reg.saved_callee()) {
+            snprintf(buf, 63, "\tlw %s, -%lu(s0)\n", reg.getNameCString(),
+                     current_sp + 4);
+            function_pre_return += buf;
+
+            snprintf(buf, 63, "\tsw %s, -%lu(s0)\n", reg.getNameCString(),
+                     current_sp + 4);
+            pre_func += buf;
+
+            current_sp += 4;
+        }
+    }
+
+    dumpInstructions(m_output_file.get(), riscv_assembly_function_start_label,
+                     p_function.getNameCString(), p_function.getNameCString(),
+                     p_function.getNameCString());
     dumpInstructions(m_output_file.get(), riscv_assembly_add_stack_pointer,
                      (const size_t)current_sp);
+
+    if (pre_func.size() > 0)
+        dumpInstructions(m_output_file.get(), pre_func.c_str());
+
     dumpInstructions(m_output_file.get(), argument_inst_buf.c_str());
+
+    std::stringstream ss(std::move(m_Inst_buff));
+    m_Inst_buff.clear();
+    char inst_buf[256];
+    while (ss.getline(inst_buf, sizeof(inst_buf) - 1)) {
+        if (strncmp(inst_buf, "return", 7) == 0) {
+            char temp_buf[1024];
+            snprintf(temp_buf, sizeof(temp_buf) - 1,
+                     "\tlw ra, 0(s0)\n"
+                     "\taddi sp, s0, 8\n"
+                     "\tlw s0, 4(s0)\n"
+                     "\tjr ra\t\t\t\t# return\n");
+            m_Inst_buff += function_pre_return;
+            m_Inst_buff += temp_buf;
+        } else {
+            m_Inst_buff += inst_buf;
+            m_Inst_buff += '\n';
+        }
+    }
+
     dumpInstructions(m_output_file.get(), m_Inst_buff.c_str());
     m_Inst_buff.clear();
 
@@ -822,6 +1219,7 @@ void CodeGenerator::visit(FunctionNode &p_function) {
 
     dumpInstructions(m_output_file.get(), riscv_assembly_reset_stack_pointer,
                      current_sp);
+    dumpInstructions(m_output_file.get(), function_pre_return.c_str());
     dumpInstructions(m_output_file.get(), riscv_assembly_function_end,
                      p_function.getNameCString(), p_function.getNameCString());
     current_sp = prev_sp;
@@ -974,8 +1372,21 @@ void CodeGenerator::visit(UnaryOperatorNode &p_un_op) {
 }
 
 void CodeGenerator::visit(FunctionInvocationNode &p_func_invocation) {
-    three_addr_ind = ThreeAddressCodeTable.size();
-    ThreeAddressCodeTable.emplace_back(&p_func_invocation);
+    size_t curr_ind = ThreeAddressCodeTable.size();
+    ThreeAddressCodeTable.emplace_back(
+        (ThreeAddressCodeFuncInvocation){.func = &p_func_invocation});
+
+    std::vector<size_t> parameters;
+    std::for_each(p_func_invocation.getArguments().begin(),
+                  p_func_invocation.getArguments().end(),
+                  [&](const std::unique_ptr<ExpressionNode> &p_expr) {
+                      const_cast<ExpressionNode &>(*p_expr).accept(*this);
+                      parameters.emplace_back(three_addr_ind);
+                  });
+
+    std::get<ThreeAddressCodeFuncInvocation>(ThreeAddressCodeTable[curr_ind])
+        .parameters = std::move(parameters);
+    three_addr_ind = curr_ind;
 }
 
 void CodeGenerator::visit(VariableReferenceNode &p_variable_ref) {
@@ -1174,7 +1585,6 @@ void CodeGenerator::visit(ForNode &p_for) {
     std::string inst_buf, prev_inst_buf = std::move(m_Inst_buff);
     m_Inst_buff.clear();
 
-    auto const &lower = p_for.getLowerBound();
     auto const &upper = p_for.getUpperBound();
 
     m_context_stack.emplace(CodeGenContext::kForLoopIfWhile);
@@ -1251,11 +1661,7 @@ void CodeGenerator::visit(ReturnNode &p_return) {
     // return value
     auto local_used_reg = expr_handler(0, RiscvRegisterEnum::a0);
     char buf[1024];
-    snprintf(buf, sizeof(buf) - 1,
-             "\tlw ra, 0(s0)\n"
-             "\taddi sp, s0, 8\n"
-             "\tlw s0, 4(s0)\n"
-             "\tjr ra\t\t\t\t# return\n");
+    snprintf(buf, 63, "return\n");
     m_Inst_buff += std::move(buf);
 
     std::for_each(local_used_reg.begin(), local_used_reg.end(),

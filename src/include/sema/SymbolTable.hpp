@@ -97,6 +97,7 @@ public:
     const Attribute &getAttribute() const { return m_attribute; }
 
     void setSp(const long sp) { p_stack_pointer_offset = -sp - 4; }
+    void modifySp(const long offset) { p_stack_pointer_offset += offset; }
     const long getSp() const { return p_stack_pointer_offset; }
 };
 
