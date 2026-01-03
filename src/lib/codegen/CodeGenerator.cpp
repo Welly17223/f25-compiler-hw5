@@ -26,7 +26,6 @@
 #include <iterator>
 #include <list>
 #include <memory>
-#include <pstl/glue_execution_defs.h>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -35,7 +34,6 @@
 #include <unordered_map>
 #include <utility>
 
-#include <execution>
 #include <numeric>
 #include <vector>
 
