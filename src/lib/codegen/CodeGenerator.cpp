@@ -45,8 +45,7 @@
 const char *CodeGenerator::RiscvRegister::RegName[] = {
     "zero", "ra", "sp", "gp", "tp",  "t0",  "t1", "t2", "s0", "s1", "a0",
     "a1",   "a2", "a3", "a4", "a5",  "a6",  "a7", "s2", "s3", "s4", "s5",
-    "s6",   "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
-};
+    "s6",   "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6", "NO_REG"};
 
 const uint8_t CodeGenerator::RiscvRegister::RegPriority[] = {
     32, 32, 32, 32, 32, 0,  1,  2,  12, 13, 14, 25, 26, 11, 10, 9,
@@ -557,12 +556,21 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
     }
 
     // compute virtual register live cycle
-    // FIX: allocate s1~s9 to virtual register crossing the functino call
+    // Note: allocate s1~s9 to virtual register crossing the functino call
     for (int i = 0; i < 32; i++) {
         auto reg = RiscvRegister(i);
         std::vector<liveRange> v;
-        if (reg.saved_callee() ^ reg.saved_caller()) {
-            real_reg_mat[reg] = v;
+
+        switch (reg.getEnum()) {
+            // Note: save for spilled register
+        case RiscvRegisterEnum::t5:
+        case RiscvRegisterEnum::t6:
+            continue;
+        default:
+            if (reg.saved_callee() ^ reg.saved_caller()) {
+                real_reg_mat[reg] = v;
+            }
+            break;
         }
     }
 
@@ -598,13 +606,10 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                 liveRange{.start = it->id, .end = it->id});
 
             real_reg_start_time.erase(it->real_reg_write.value());
-            printf("%s start at %ld\n",
-                   it->real_reg_write.value().getNameCString(), it->id);
         }
 
         if (it->real_reg_read.has_value()) {
             for (auto &j : it->real_reg_read.value()) {
-                printf("%s end at %ld\n", j.getNameCString(), it->id);
                 real_reg_start_time[j] = it->id;
             }
         }
@@ -693,6 +698,7 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
         // Spill
         virt_reg_is_spilled[ind] = true;
         virt_reg_spilled_sp[ind] = current_sp;
+        virt_real_reg_map[ind] = RiscvRegisterEnum::NO_REG;
         current_sp += 4;
     }
 
@@ -737,6 +743,15 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
         virt_real_reg_map[it->write_reg] = ret_reg;
     }
 
+    // spilled stack
+    {
+        char temp[64];
+        if (current_sp != origional_sp) {
+            snprintf(temp, 63, "\taddi sp, sp, %ld\n",
+                     origional_sp - current_sp);
+            m_Inst_buff += temp;
+        }
+    }
     std::set<RiscvRegister> func_used_reg;
     for (auto it = virt_reg_inst_stack.rbegin();
          it != virt_reg_inst_stack.rend(); it++) {
@@ -819,8 +834,41 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
             }
         } else {
             size_t read_regs_length = 0;
-            if (it->read_regs)
+            if (it->read_regs) {
                 read_regs_length = it->read_regs->size();
+
+                // handle spilled register
+                for (auto read_reg = (*it->read_regs).begin();
+                     read_reg != (*it->read_regs).end(); read_reg++) {
+                    if (!virt_reg_is_spilled[**read_reg])
+                        continue;
+
+                    size_t read_reg_ind =
+                        std::distance((*it->read_regs).begin(), read_reg);
+                    char temp[64];
+                    switch (read_reg_ind) {
+                    case 0:
+                        virt_real_reg_map[**read_reg] = RiscvRegisterEnum::t5;
+                        break;
+                    case 1:
+                        virt_real_reg_map[**read_reg] = RiscvRegisterEnum::t6;
+                        break;
+                    default:
+                        // this line won't reach
+                        assert(false);
+                        break;
+                    }
+                    snprintf(temp, 63, "\tlw %s, -%ld(s0)\n",
+                             virt_real_reg_map[**read_reg].getNameCString(),
+                             virt_reg_spilled_sp[**read_reg] + 4);
+                    m_Inst_buff += temp;
+                }
+            }
+
+            // handle spilled register
+            if (virt_reg_is_spilled[it->write_reg]) {
+                virt_real_reg_map[it->write_reg] = RiscvRegisterEnum::t5;
+            }
 
             RiscvRegister &write_reg = virt_real_reg_map[it->write_reg];
             auto getRealReg = [&](std::unique_ptr<std::vector<size_t *>> &regs,
@@ -889,6 +937,11 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
                      "\t%s\t\t\t# place: %ld\n", temp_buf, it->id);
 
             m_Inst_buff += temp_buf_end;
+            if (virt_reg_is_spilled[it->write_reg]) {
+                snprintf(temp_buf, 63, "\tsw t5, -%ld(s0)\n",
+                         virt_reg_spilled_sp[it->write_reg] + 4);
+                m_Inst_buff += temp_buf;
+            }
         }
     }
 
@@ -899,6 +952,15 @@ CodeGenerator::expr_handler(size_t start_ind, RiscvRegister ret_reg) {
         }
     }
     GetAvailableReg(local_used_reg[start_ind]);
+
+    {
+        char temp[64];
+        if (current_sp != origional_sp) {
+            snprintf(temp, 63, "\taddi sp, sp, %ld\n",
+                     current_sp - origional_sp);
+            m_Inst_buff += temp;
+        }
+    }
 
     current_sp = origional_sp;
     return local_used_reg;

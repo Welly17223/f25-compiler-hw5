@@ -45,7 +45,6 @@ private:
 
 public:
     enum class RiscvRegisterEnum : int8_t {
-        NO_REG = -1,
         zero,
         ra,
         sp,
@@ -78,6 +77,7 @@ public:
         t4,
         t5,
         t6,
+        NO_REG
     };
 
     class RiscvRegister {
@@ -88,6 +88,7 @@ public:
         static const char *RegName[];
         static const uint8_t RegPriority[];
         const char *getNameCString() const { return RegName[(uint8_t)reg]; }
+        const RiscvRegisterEnum getEnum() const { return reg; }
         friend bool operator<(const RiscvRegister &lhs,
                               const RiscvRegister &rhs) {
             return RegPriority[(uint8_t)lhs.reg] <
@@ -225,7 +226,7 @@ private:
     std::set<RiscvRegister> used_reg;
     std::vector<ThreeAddressCodeEntry> ThreeAddressCodeTable;
     std::vector<RiscvRegister> ThreeAddressCodeTableReg;
-    std::vector<SymbolEntry*> function_argument_entry;
+    std::vector<SymbolEntry *> function_argument_entry;
 
     std::string m_source_file_path;
     std::unordered_map<SemanticAnalyzer::AstNodeAddr, SymbolManager::Table>
@@ -245,8 +246,16 @@ private:
         // Note: Avaliable register
         for (uint8_t i = 0; i < 32; i++) {
             auto reg = RiscvRegister(i);
-            if (reg.saved_callee() ^ reg.saved_caller()) {
-                avaliable_reg.emplace(std::move(reg));
+            switch (reg.getEnum()) {
+                // save for spilled register
+            case RiscvRegisterEnum::t5:
+            case RiscvRegisterEnum::t6:
+                continue;
+            default:
+                if (reg.saved_callee() ^ reg.saved_caller()) {
+                    avaliable_reg.emplace(std::move(reg));
+                }
+                break;
             }
         }
         used_reg.clear();
